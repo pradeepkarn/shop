@@ -259,6 +259,30 @@ class SellerProfile extends Model
     }
 
     /**
+     * @return HasMany<Brand, $this>
+     */
+    public function brandsRequested(): HasMany
+    {
+        return $this->hasMany(Brand::class, 'requested_by');
+    }
+
+    /**
+     * @return HasMany<Product, $this>
+     */
+    public function productsCreated(): HasMany
+    {
+        return $this->hasMany(Product::class, 'created_by');
+    }
+
+    /**
+     * @return HasMany<Listing, $this>
+     */
+    public function listings(): HasMany
+    {
+        return $this->hasMany(Listing::class);
+    }
+
+    /**
      * The "booted" method of the model.
      */
     protected static function booted(): void

@@ -16,6 +16,13 @@ Route::middleware('auth:admin')->group(function () {
     Route::livewire('sellers', 'pages::admin.sellers-index')->name('sellers.index');
     Route::livewire('sellers/{sellerProfile}', 'pages::admin.sellers-show')->name('sellers.show');
     Route::get('sellers/documents/{document}', [AdminSellerDocumentController::class, 'show'])->name('sellers.documents.show');
+
+    // Catalog & Brands
+    Route::livewire('catalog/categories', 'pages::admin.catalog.categories')->name('catalog.categories');
+    Route::livewire('catalog/verticals', 'pages::admin.catalog.verticals')->name('catalog.verticals');
+    Route::livewire('catalog/verticals/{vertical}/attributes', 'pages::admin.catalog.vertical-attributes')->name('catalog.vertical-attributes');
+    Route::livewire('catalog/brands', 'pages::admin.catalog.brands')->name('catalog.brands');
+
     Route::livewire('profile', 'pages::admin.profile')->name('profile');
 
     Route::post('logout', function (Request $request) {

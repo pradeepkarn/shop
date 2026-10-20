@@ -23,7 +23,10 @@ class DatabaseSeeder extends Seeder
         ]);
 
         if (app()->isLocal()) {
-            $this->call(AdminSeeder::class);
+            $this->call([
+                AdminSeeder::class,
+                CatalogSeeder::class,
+            ]);
         }
     }
 }
