@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminSellerDocumentController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -12,6 +13,9 @@ Route::middleware('auth:admin')->group(function () {
     Route::livewire('/', 'pages::admin.dashboard')->name('dashboard');
     Route::livewire('customers', 'pages::admin.customers')->name('customers');
     Route::livewire('customers/{user}', 'pages::admin.customer-details')->name('customers.show');
+    Route::livewire('sellers', 'pages::admin.sellers-index')->name('sellers.index');
+    Route::livewire('sellers/{sellerProfile}', 'pages::admin.sellers-show')->name('sellers.show');
+    Route::get('sellers/documents/{document}', [AdminSellerDocumentController::class, 'show'])->name('sellers.documents.show');
     Route::livewire('profile', 'pages::admin.profile')->name('profile');
 
     Route::post('logout', function (Request $request) {
@@ -21,4 +25,3 @@ Route::middleware('auth:admin')->group(function () {
         return redirect()->route('admin.login');
     })->name('logout');
 });
-

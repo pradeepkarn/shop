@@ -15,6 +15,16 @@
                     <flux:sidebar.item icon="home" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                         {{ __('Dashboard') }}
                     </flux:sidebar.item>
+
+                    @if (auth()->user()->isSeller())
+                        <flux:sidebar.item icon="building-storefront" :href="route('seller.dashboard')" wire:navigate>
+                            {{ __('Seller Dashboard') }}
+                        </flux:sidebar.item>
+                    @else
+                        <flux:sidebar.item icon="building-storefront" :href="route('seller.apply')" :current="request()->routeIs('seller.apply')" wire:navigate>
+                            {{ __('Become a Seller') }}
+                        </flux:sidebar.item>
+                    @endif
                 </flux:sidebar.group>
             </flux:sidebar.nav>
 
@@ -65,6 +75,19 @@
                     <flux:menu.separator />
 
                     <flux:menu.radio.group>
+                        @if (auth()->user()->isSeller())
+                            <flux:menu.item :href="route('seller.dashboard')" icon="building-storefront" wire:navigate>
+                                {{ __('Switch to seller') }}
+                            </flux:menu.item>
+                        @elseif (auth()->user()->sellerProfile)
+                            <flux:menu.item :href="route('seller.apply')" icon="document-text" wire:navigate>
+                                {{ __('Seller application') }}
+                            </flux:menu.item>
+                        @else
+                            <flux:menu.item :href="route('seller.apply')" icon="building-storefront" wire:navigate>
+                                {{ __('Apply to become a seller') }}
+                            </flux:menu.item>
+                        @endif
                         <flux:menu.item :href="route('profile.edit')" icon="cog" wire:navigate>
                             {{ __('Settings') }}
                         </flux:menu.item>

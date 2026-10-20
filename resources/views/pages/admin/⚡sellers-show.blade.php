@@ -1,0 +1,286 @@
+<?php
+
+use App\Enums\SellerStatus;
+use App\Mail\SellerApplicationApproved;
+use App\Mail\SellerApplicationRejected;
+use App\Models\Admin;
+use App\Models\SellerProfile;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
+use Livewire\Attributes\Layout;
+use Livewire\Attributes\Title;
+use Livewire\Component;
+
+new #[Layout('layouts.admin')] #[Title('Review Seller Application')] class extends Component {
+    public SellerProfile $sellerProfile;
+    public string $rejection_reason = '';
+    public bool $showRejectForm = false;
+
+    public function mount(SellerProfile $sellerProfile): void
+    {
+        $this->sellerProfile = $sellerProfile->load(['user', 'documents', 'reviewer']);
+    }
+
+    public function approveApplication(): void
+    {
+        /** @var Admin $admin */
+        $admin = Auth::guard('admin')->user();
+
+        $this->sellerProfile->approve($admin);
+
+        Mail::to($this->sellerProfile->user->email)->queue(
+            new SellerApplicationApproved($this->sellerProfile)
+        );
+
+        $this->sellerProfile->refresh();
+        session()->flash('status', "Application for [{$this->sellerProfile->store_name}] has been approved.");
+    }
+
+    public function rejectApplication(): void
+    {
+        $this->validate([
+            'rejection_reason' => ['required', 'string', 'min:5', 'max:1000'],
+        ]);
+
+        /** @var Admin $admin */
+        $admin = Auth::guard('admin')->user();
+
+        $this->sellerProfile->reject($admin, $this->rejection_reason);
+
+        Mail::to($this->sellerProfile->user->email)->queue(
+            new SellerApplicationRejected($this->sellerProfile, $this->rejection_reason)
+        );
+
+        $this->showRejectForm = false;
+        $this->rejection_reason = '';
+        $this->sellerProfile->refresh();
+
+        session()->flash('status', "Application for [{$this->sellerProfile->store_name}] has been rejected.");
+    }
+
+    public function suspendSeller(): void
+    {
+        /** @var Admin $admin */
+        $admin = Auth::guard('admin')->user();
+
+        $this->sellerProfile->suspend($admin);
+        $this->sellerProfile->refresh();
+
+        session()->flash('status', "Seller [{$this->sellerProfile->store_name}] has been suspended.");
+    }
+
+    public function reactivateSeller(): void
+    {
+        /** @var Admin $admin */
+        $admin = Auth::guard('admin')->user();
+
+        $this->sellerProfile->reactivate($admin);
+        $this->sellerProfile->refresh();
+
+        session()->flash('status', "Seller [{$this->sellerProfile->store_name}] has been reactivated.");
+    }
+}; ?>
+
+<div class="space-y-6">
+    <div class="flex items-center gap-2">
+        <a href="{{ route('admin.sellers.index') }}" wire:navigate class="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white transition">
+            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+            </svg>
+            <span>Back to Seller Applications</span>
+        </a>
+    </div>
+
+    @if (session('status'))
+        <div class="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-300">
+            {{ session('status') }}
+        </div>
+    @endif
+
+    <!-- Header & Action Controls -->
+    <div class="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <div class="flex items-center gap-3">
+                @if ($sellerProfile->logoUrl())
+                    <img src="{{ $sellerProfile->logoUrl() }}" alt="Logo" class="size-10 rounded-lg object-cover border border-zinc-200 dark:border-zinc-700" />
+                @endif
+                <h2 class="text-xl font-bold tracking-tight text-zinc-900 dark:text-white">{{ $sellerProfile->store_name }}</h2>
+                @if ($sellerProfile->status === SellerStatus::Approved)
+                    <span class="inline-flex items-center rounded-full bg-green-50 px-3 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400 border border-green-200 dark:border-green-800">
+                        Approved
+                    </span>
+                @elseif ($sellerProfile->status === SellerStatus::Pending)
+                    <span class="inline-flex items-center rounded-full bg-amber-50 px-3 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/50 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                        Pending Review
+                    </span>
+                @elseif ($sellerProfile->status === SellerStatus::Suspended)
+                    <span class="inline-flex items-center rounded-full bg-red-50 px-3 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950/50 dark:text-red-400 border border-red-200 dark:border-red-800">
+                        Suspended
+                    </span>
+                @elseif ($sellerProfile->status === SellerStatus::Rejected)
+                    <span class="inline-flex items-center rounded-full bg-zinc-100 px-3 py-0.5 text-xs font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 border border-zinc-300 dark:border-zinc-700">
+                        Rejected
+                    </span>
+                @endif
+            </div>
+            <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                Applied by <strong>{{ $sellerProfile->user->name }}</strong> ({{ $sellerProfile->user->email }}) on {{ $sellerProfile->submitted_at?->format('M j, Y H:i') ?? '—' }}
+            </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+            @if ($sellerProfile->status === SellerStatus::Pending)
+                <button wire:click="approveApplication" type="button" data-test="admin-approve-button"
+                        class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition shadow-xs">
+                    Approve Application
+                </button>
+                <button wire:click="$toggle('showRejectForm')" type="button" data-test="admin-reject-toggle"
+                        class="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-zinc-800 dark:text-red-400 dark:hover:bg-red-950/30 transition shadow-xs">
+                    Reject Application
+                </button>
+            @elseif ($sellerProfile->status === SellerStatus::Approved)
+                <button wire:click="suspendSeller" type="button" data-test="admin-suspend-button"
+                        class="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-zinc-800 dark:text-red-400 dark:hover:bg-red-950/30 transition shadow-xs">
+                    Suspend Seller
+                </button>
+            @elseif ($sellerProfile->status === SellerStatus::Suspended)
+                <button wire:click="reactivateSeller" type="button" data-test="admin-reactivate-button"
+                        class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition shadow-xs">
+                    Reactivate Seller
+                </button>
+            @endif
+        </div>
+    </div>
+
+    <!-- Reject Reason Form -->
+    @if ($showRejectForm && $sellerProfile->status === SellerStatus::Pending)
+        <div class="rounded-xl border border-red-200 bg-red-50/50 p-6 dark:border-red-900/50 dark:bg-red-950/20 shadow-xs">
+            <h3 class="text-sm font-semibold text-red-800 dark:text-red-300">Provide Rejection Reason</h3>
+            <p class="mt-1 text-xs text-red-600 dark:text-red-400">Explain clearly what the seller must correct or upload before resubmitting.</p>
+
+            <form wire:submit="rejectApplication" class="mt-4 space-y-4">
+                <textarea wire:model="rejection_reason" rows="3" required placeholder="e.g. Identity proof is blurry. Please upload a clear color scan of your government-issued ID card."
+                          class="block w-full rounded-lg border border-red-300 bg-white p-3 text-sm text-zinc-900 focus:border-red-500 focus:outline-hidden focus:ring-1 focus:ring-red-500 dark:border-red-800 dark:bg-zinc-900 dark:text-white"></textarea>
+                @error('rejection_reason') <p class="text-xs text-red-600 dark:text-red-400">{{ $message }}</p> @enderror
+
+                <div class="flex gap-2">
+                    <button type="submit" data-test="admin-confirm-reject-button" class="rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 transition shadow-xs">
+                        Confirm Rejection & Send Email
+                    </button>
+                    <button type="button" wire:click="$set('showRejectForm', false)" class="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    @endif
+
+    <!-- Bank Details Changed Alert -->
+    @if ($sellerProfile->bank_updated_at)
+        <div class="rounded-xl border border-blue-200 bg-blue-50 p-5 dark:border-blue-900/50 dark:bg-blue-950/30">
+            <div class="flex items-center gap-3">
+                <svg class="size-5 shrink-0 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <div class="text-xs text-blue-800 dark:text-blue-300">
+                    <strong class="font-semibold text-sm">Bank Details Updated:</strong> The seller updated payout account information on
+                    {{ $sellerProfile->bank_updated_at->format('M j, Y H:i:s') }}. Please verify the new bank records.
+                </div>
+            </div>
+        </div>
+    @endif
+
+    <!-- Store & Applicant Information -->
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <!-- Store Information -->
+        <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Store Details</h3>
+            <dl class="mt-4 space-y-3 text-xs">
+                <div><span class="text-zinc-500">Store Name:</span> <span class="font-medium text-zinc-900 dark:text-white">{{ $sellerProfile->store_name }}</span></div>
+                <div><span class="text-zinc-500">Store Slug:</span> <span class="font-medium text-zinc-900 dark:text-white">/stores/{{ $sellerProfile->store_slug }}</span></div>
+                <div><span class="text-zinc-500">Business Type:</span> <span class="font-medium capitalize text-zinc-900 dark:text-white">{{ $sellerProfile->business_type }}</span></div>
+                <div><span class="text-zinc-500">Description:</span> <span class="font-medium text-zinc-900 dark:text-white">{{ $sellerProfile->description ?: 'No description provided.' }}</span></div>
+                <div><span class="text-zinc-500">Support Email:</span> <span class="font-medium text-zinc-900 dark:text-white">{{ $sellerProfile->support_email }}</span></div>
+                <div><span class="text-zinc-500">Support Phone:</span> <span class="font-medium text-zinc-900 dark:text-white">{{ $sellerProfile->support_phone }}</span></div>
+            </dl>
+        </div>
+
+        <!-- Pickup Address -->
+        <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Pickup Address</h3>
+            <p class="mt-4 text-xs text-zinc-800 dark:text-zinc-200 leading-relaxed">
+                {{ $sellerProfile->pickup_address_line1 }}
+                @if ($sellerProfile->pickup_address_line2)
+                    , {{ $sellerProfile->pickup_address_line2 }}
+                @endif
+                <br>
+                {{ $sellerProfile->pickup_city }}, {{ $sellerProfile->pickup_state }} - {{ $sellerProfile->pickup_postal_code }}
+                <br>
+                {{ $sellerProfile->pickup_country }}
+            </p>
+
+            <h3 class="mt-6 text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Review Audit</h3>
+            <dl class="mt-2 space-y-2 text-xs">
+                <div><span class="text-zinc-500">Last Reviewed By:</span> <span class="font-medium text-zinc-900 dark:text-white">{{ $sellerProfile->reviewer?->name ?? 'Not yet reviewed' }}</span></div>
+                <div><span class="text-zinc-500">Reviewed At:</span> <span class="font-medium text-zinc-900 dark:text-white">{{ $sellerProfile->reviewed_at?->format('M j, Y H:i') ?? '—' }}</span></div>
+                @if ($sellerProfile->rejection_reason)
+                    <div><span class="text-red-500 font-semibold">Rejection Reason:</span> <span class="text-red-600 dark:text-red-400">{{ $sellerProfile->rejection_reason }}</span></div>
+                @endif
+            </dl>
+        </div>
+    </div>
+
+    <!-- Tax & Bank Details -->
+    <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Tax & Bank Account Records (Encrypted in Storage)</h3>
+        <dl class="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+            <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-800/30">
+                <dt class="text-zinc-500">PAN Card</dt>
+                <dd class="mt-1 font-semibold uppercase text-zinc-900 dark:text-white">{{ $sellerProfile->pan }}</dd>
+            </div>
+            <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-800/30">
+                <dt class="text-zinc-500">GSTIN</dt>
+                <dd class="mt-1 font-semibold uppercase text-zinc-900 dark:text-white">{{ $sellerProfile->gstin ?: 'None' }}</dd>
+            </div>
+            <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-800/30">
+                <dt class="text-zinc-500">Beneficiary Name</dt>
+                <dd class="mt-1 font-semibold text-zinc-900 dark:text-white">{{ $sellerProfile->bank_account_holder }}</dd>
+            </div>
+            <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-800/30">
+                <dt class="text-zinc-500">Account Number & IFSC</dt>
+                <dd class="mt-1 font-semibold text-zinc-900 dark:text-white">{{ $sellerProfile->bank_account_number }} ({{ $sellerProfile->ifsc }})</dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- KYC Documents Section -->
+    <div class="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Uploaded KYC Documents (Private Storage)</h3>
+        <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Stored on private disk and accessible exclusively via authorized admin stream.</p>
+
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            @forelse ($sellerProfile->documents as $doc)
+                <div class="flex items-center justify-between rounded-lg border border-zinc-200 p-4 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+                    <div>
+                        <div class="text-xs font-semibold uppercase text-zinc-500 dark:text-zinc-400">
+                            {{ str_replace('_', ' ', $doc->type) }}
+                        </div>
+                        <div class="mt-1 text-sm font-medium text-zinc-900 dark:text-white">
+                            {{ $doc->original_name }}
+                        </div>
+                    </div>
+                    <a href="{{ route('admin.sellers.documents.show', $doc) }}" target="_blank"
+                       class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition">
+                        Download / View
+                    </a>
+                </div>
+            @empty
+                <div class="col-span-2 text-center py-6 text-xs text-zinc-400">
+                    No KYC documents uploaded yet.
+                </div>
+            @endforelse
+        </div>
+    </div>
+</div>
+

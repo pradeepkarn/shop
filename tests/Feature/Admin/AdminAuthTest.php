@@ -129,4 +129,3 @@ test('authenticated admin visiting admin login redirects to admin dashboard', fu
 
     $response->assertRedirect(route('admin.dashboard'));
 });
-

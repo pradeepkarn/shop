@@ -53,4 +53,3 @@ class Admin extends Authenticatable
             : $initials;
     }
 }
-

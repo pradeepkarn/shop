@@ -19,6 +19,19 @@
         </div>
         <flux:menu.separator />
         <flux:menu.radio.group>
+            @if (auth()->user()->isSeller())
+                <flux:menu.item :href="route('seller.dashboard')" icon="building-storefront" wire:navigate>
+                    {{ __('Switch to seller') }}
+                </flux:menu.item>
+            @elseif (auth()->user()->sellerProfile)
+                <flux:menu.item :href="route('seller.apply')" icon="document-text" wire:navigate>
+                    {{ __('Seller application') }}
+                </flux:menu.item>
+            @else
+                <flux:menu.item :href="route('seller.apply')" icon="building-storefront" wire:navigate>
+                    {{ __('Apply to become a seller') }}
+                </flux:menu.item>
+            @endif
             <flux:menu.item :href="route('profile.edit')" icon="cog" wire:navigate>
                 {{ __('Settings') }}
             </flux:menu.item>

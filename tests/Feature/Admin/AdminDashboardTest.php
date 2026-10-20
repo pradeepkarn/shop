@@ -30,4 +30,3 @@ test('dashboard displays customer counts', function () {
         ->assertSee('3') // total
         ->assertSee('1'); // this week
 });
-

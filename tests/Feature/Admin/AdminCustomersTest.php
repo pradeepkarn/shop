@@ -80,4 +80,3 @@ test('admin can toggle customer active status from customer details page', funct
 
     expect($customer->fresh()->is_active)->toBeTrue();
 });
-

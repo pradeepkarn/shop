@@ -63,4 +63,3 @@ test('active customer is not logged out by middleware on protected customer rout
     $response->assertOk();
     expect(Auth::guard('web')->check())->toBeTrue();
 });
-

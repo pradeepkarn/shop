@@ -51,4 +51,3 @@ test('admin can update password', function () {
 
     expect(Hash::check('new-password-123', $admin->fresh()->password))->toBeTrue();
 });
-
