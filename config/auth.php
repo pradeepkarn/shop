@@ -111,6 +111,13 @@ return [
             'throttle' => 60,
         ],
 
+        'users_welcome' => [
+            'provider' => 'users',
+            'table' => 'customer_welcome_tokens',
+            'expire' => 1440,
+            'throttle' => 60,
+        ],
+
         'admins' => [
             'provider' => 'admins',
             'table' => 'admin_password_reset_tokens',

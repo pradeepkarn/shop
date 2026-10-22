@@ -17,16 +17,53 @@ beforeEach(function () {
 });
 
 test('unauthorized staff cannot invoke customer management actions', function () {
-    $staff = Admin::factory()->create(); // No permissions
+    $staff = Admin::factory()->create();
+    $role = Role::findOrCreate('Customer Viewer', 'admin');
+    $role->syncPermissions([AdminPermissions::CUSTOMERS_VIEW]);
+    $staff->assignRole($role);
+
     $customer = User::factory()->create();
 
-    // pages::admin.customers -> toggleActive
+    // pages::admin.customers -> openCreateCustomerModal & saveCustomer (requires customers.create)
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.customers')
+        ->call('openCreateCustomerModal')
+        ->assertForbidden();
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.customers')
+        ->call('saveCustomer')
+        ->assertForbidden();
+
+    // pages::admin.customers -> openResetPasswordModal & confirmResetPassword (requires customers.password)
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.customers')
+        ->call('openResetPasswordModal', $customer->id)
+        ->assertForbidden();
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.customers')
+        ->call('confirmResetPassword')
+        ->assertForbidden();
+
+    // pages::admin.customer-details -> openResetPasswordModal & confirmResetPassword (requires customers.password)
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.customer-details', ['user' => $customer])
+        ->call('openResetPasswordModal')
+        ->assertForbidden();
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.customer-details', ['user' => $customer])
+        ->call('confirmResetPassword')
+        ->assertForbidden();
+
+    // pages::admin.customers -> toggleActive (requires customers.manage)
     Livewire::actingAs($staff, 'admin')
         ->test('pages::admin.customers')
         ->call('toggleActive', $customer->id)
         ->assertForbidden();
 
-    // pages::admin.customer-details -> toggleActive
+    // pages::admin.customer-details -> toggleActive (requires customers.manage)
     Livewire::actingAs($staff, 'admin')
         ->test('pages::admin.customer-details', ['user' => $customer])
         ->call('toggleActive')
@@ -277,5 +314,18 @@ test('view-only staff cannot invoke staff mutation actions', function () {
     Livewire::actingAs($staff, 'admin')
         ->test('pages::admin.staff')
         ->call('toggleActive', $target->id)
+        ->assertForbidden();
+
+    // openResetPasswordModal -> forbidden without admins.password
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.staff')
+        ->call('openResetPasswordModal', $target->id)
+        ->assertForbidden();
+
+    // confirmResetPassword -> forbidden without admins.password
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.staff')
+        ->set('resetAdminId', $target->id)
+        ->call('confirmResetPassword')
         ->assertForbidden();
 });

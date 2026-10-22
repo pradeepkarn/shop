@@ -1,14 +1,17 @@
 <?php
 
+use App\Mail\PasswordChangedByAdminMail;
 use App\Mail\StaffInvitationMail;
 use App\Models\Admin;
 use App\Services\AdminActivityLogger;
+use App\Support\PasswordGenerator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\Password as PasswordRule;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -19,12 +22,27 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
     public string $search = '';
     public string $statusFilter = 'all';
 
-    // Modal state
+    // Staff Create/Edit Modal state
     public bool $showStaffModal = false;
     public ?int $editingAdminId = null;
     public string $name = '';
     public string $email = '';
     public array $selectedRoles = [];
+    public string $creationMode = 'invite'; // 'invite' or 'password'
+    public string $password = '';
+    public string $password_confirmation = '';
+    public ?string $generatedPassword = null;
+    public bool $mustChangePassword = true;
+
+    // Staff Reset Password Modal state
+    public bool $showResetPasswordModal = false;
+    public ?int $resetAdminId = null;
+    public string $resetTargetEmail = '';
+    public string $resetMode = 'link'; // 'link' or 'password'
+    public string $newPassword = '';
+    public string $newPassword_confirmation = '';
+    public ?string $resetGeneratedPassword = null;
+    public bool $resetMustChangePassword = true;
 
     public function mount(): void
     {
@@ -35,9 +53,43 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
     {
         $this->authorize('admins.manage');
 
-        $this->reset(['editingAdminId', 'name', 'email', 'selectedRoles']);
+        $this->reset([
+            'editingAdminId',
+            'name',
+            'email',
+            'selectedRoles',
+            'creationMode',
+            'password',
+            'password_confirmation',
+            'generatedPassword',
+            'mustChangePassword',
+        ]);
         $this->resetErrorBag();
         $this->showStaffModal = true;
+    }
+
+    public function closeStaffModal(): void
+    {
+        $this->showStaffModal = false;
+        $this->reset([
+            'editingAdminId',
+            'name',
+            'email',
+            'selectedRoles',
+            'creationMode',
+            'password',
+            'password_confirmation',
+            'generatedPassword',
+            'mustChangePassword',
+        ]);
+        $this->resetErrorBag();
+    }
+
+    public function generateStaffPassword(): void
+    {
+        $this->generatedPassword = PasswordGenerator::generate();
+        $this->password = $this->generatedPassword;
+        $this->password_confirmation = $this->generatedPassword;
     }
 
     public function openEditModal(int $adminId): void
@@ -68,8 +120,131 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
         $this->email = $target->email;
         $this->selectedRoles = $target->roles->pluck('name')->all();
 
+        $this->reset([
+            'creationMode',
+            'password',
+            'password_confirmation',
+            'generatedPassword',
+            'mustChangePassword',
+        ]);
         $this->resetErrorBag();
         $this->showStaffModal = true;
+    }
+
+    public function openResetPasswordModal(int $adminId): void
+    {
+        $this->authorize('admins.password');
+
+        /** @var Admin $currentAdmin */
+        $currentAdmin = Auth::guard('admin')->user();
+
+        if ($currentAdmin->id === $adminId) {
+            session()->flash('error', 'You cannot reset your own password here. Use your profile settings.');
+
+            return;
+        }
+
+        $target = Admin::findOrFail($adminId);
+
+        if (! $currentAdmin->canManageStaff($target)) {
+            session()->flash('error', 'Privilege Escalation Blocked: You cannot reset password for staff member who holds permissions or roles outside your authority.');
+
+            return;
+        }
+
+        $this->resetAdminId = $target->id;
+        $this->resetTargetEmail = $target->email;
+        $this->resetMode = 'link';
+        $this->resetMustChangePassword = true;
+        $this->reset([
+            'newPassword',
+            'newPassword_confirmation',
+            'resetGeneratedPassword',
+        ]);
+        $this->resetErrorBag();
+        $this->showResetPasswordModal = true;
+    }
+
+    public function closeResetPasswordModal(): void
+    {
+        $this->showResetPasswordModal = false;
+        $this->reset([
+            'resetAdminId',
+            'resetTargetEmail',
+            'resetMode',
+            'newPassword',
+            'newPassword_confirmation',
+            'resetGeneratedPassword',
+            'resetMustChangePassword',
+        ]);
+        $this->resetErrorBag();
+    }
+
+    public function generateResetPassword(): void
+    {
+        $this->resetGeneratedPassword = PasswordGenerator::generate();
+        $this->newPassword = $this->resetGeneratedPassword;
+        $this->newPassword_confirmation = $this->resetGeneratedPassword;
+    }
+
+    public function confirmResetPassword(): void
+    {
+        $this->authorize('admins.password');
+
+        /** @var Admin $currentAdmin */
+        $currentAdmin = Auth::guard('admin')->user();
+
+        if (! $this->resetAdminId || $currentAdmin->id === $this->resetAdminId) {
+            session()->flash('error', 'You cannot reset your own password here.');
+            $this->closeResetPasswordModal();
+
+            return;
+        }
+
+        $target = Admin::findOrFail($this->resetAdminId);
+
+        if (! $currentAdmin->canManageStaff($target)) {
+            session()->flash('error', 'Privilege Escalation Blocked: You cannot reset password for staff member who holds permissions or roles outside your authority.');
+            $this->closeResetPasswordModal();
+
+            return;
+        }
+
+        if ($this->resetMode === 'link') {
+            DB::table('admin_password_reset_tokens')->where('email', $target->email)->delete();
+
+            $token = Password::broker('admins')->createToken($target);
+            Mail::to($target->email)->queue(new StaffInvitationMail($target, $token));
+
+            AdminActivityLogger::log('staff.reset_link_sent', $target, [
+                'email' => $target->email,
+            ]);
+
+            session()->flash('status', "Password reset link sent to [{$target->email}].");
+        } else {
+            $this->validate([
+                'newPassword' => ['required', 'string', 'confirmed', PasswordRule::defaults()],
+            ]);
+
+            $target->forceFill([
+                'password' => Hash::make($this->newPassword),
+                'must_change_password' => $this->resetMustChangePassword,
+                'remember_token' => null,
+            ])->save();
+
+            // Notify staff member by email
+            Mail::to($target->email)->queue(new PasswordChangedByAdminMail($target));
+
+            AdminActivityLogger::log('staff.password_reset', $target, [
+                'email' => $target->email,
+                'must_change_password' => $this->resetMustChangePassword,
+            ]);
+
+            session()->flash('status', "Password for [{$target->email}] has been reset successfully.");
+        }
+
+        // Immediately clear secrets from state
+        $this->closeResetPasswordModal();
     }
 
     public function saveStaff(): void
@@ -167,34 +342,62 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
 
             session()->flash('status', "Staff member [{$target->email}] updated successfully.");
         } else {
-            // New Staff Invitation
-            $newAdmin = Admin::create([
-                'name' => $this->name,
-                'email' => $this->email,
-                'password' => Hash::make(Str::random(32)),
-                'is_active' => true,
-                'invitation_accepted_at' => null,
-            ]);
+            if ($this->creationMode === 'password') {
+                $this->validate([
+                    'password' => ['required', 'string', 'confirmed', PasswordRule::defaults()],
+                ]);
 
-            $newAdmin->syncRoles($this->selectedRoles);
+                $newAdmin = (new Admin)->forceFill([
+                    'name' => $this->name,
+                    'email' => $this->email,
+                    'password' => Hash::make($this->password),
+                    'must_change_password' => $this->mustChangePassword,
+                    'is_active' => true,
+                    'invitation_accepted_at' => now(),
+                ]);
+                $newAdmin->save();
 
-            // Generate set-password token and send email
-            $token = Password::broker('admins')->createToken($newAdmin);
-            Mail::to($newAdmin->email)->queue(new StaffInvitationMail($newAdmin, $token));
+                $newAdmin->syncRoles($this->selectedRoles);
 
-            AdminActivityLogger::log('staff.invited', $newAdmin, [
-                'email' => $newAdmin->email,
-                'roles' => $this->selectedRoles,
-            ]);
+                AdminActivityLogger::log('staff.created', $newAdmin, [
+                    'email' => $newAdmin->email,
+                    'roles' => $this->selectedRoles,
+                    'password_mode' => 'set_now',
+                    'must_change_password' => $this->mustChangePassword,
+                ]);
 
-            session()->flash('status', "Invitation email sent to [{$newAdmin->email}] with set-password link.");
+                session()->flash('status', "Staff member [{$newAdmin->email}] created successfully with active credentials.");
+            } else {
+                // New Staff Invitation
+                $newAdmin = (new Admin)->forceFill([
+                    'name' => $this->name,
+                    'email' => $this->email,
+                    'password' => Hash::make(Str::random(32)),
+                    'must_change_password' => false,
+                    'is_active' => true,
+                    'invitation_accepted_at' => null,
+                ]);
+                $newAdmin->save();
+
+                $newAdmin->syncRoles($this->selectedRoles);
+
+                // Generate set-password token and send email
+                $token = Password::broker('admins')->createToken($newAdmin);
+                Mail::to($newAdmin->email)->queue(new StaffInvitationMail($newAdmin, $token));
+
+                AdminActivityLogger::log('staff.invited', $newAdmin, [
+                    'email' => $newAdmin->email,
+                    'roles' => $this->selectedRoles,
+                ]);
+
+                session()->flash('status', "Invitation email sent to [{$newAdmin->email}] with set-password link.");
+            }
         }
 
         // Flush permission cache
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
-        $this->showStaffModal = false;
-        $this->reset(['editingAdminId', 'name', 'email', 'selectedRoles']);
+        $this->closeStaffModal();
     }
 
     public function resendInvite(int $adminId): void
@@ -260,7 +463,7 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
         }
 
         $newStatus = ! $target->is_active;
-        $target->update(['is_active' => $newStatus]);
+        $target->forceFill(['is_active' => $newStatus])->save();
 
         // If deactivating, delete any pending reset/invite tokens so they cannot be redeemed
         if (! $newStatus) {
@@ -424,6 +627,13 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
                             <td class="px-4 py-3 text-right">
                                 <div class="flex items-center justify-end gap-2">
                                     @if ($member->id !== Auth::guard('admin')->id())
+                                        @can('admins.password')
+                                            <button wire:click="openResetPasswordModal({{ $member->id }})"
+                                                    type="button"
+                                                    class="rounded-md border border-amber-300 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/30">
+                                                Reset Password
+                                            </button>
+                                        @endcan
                                         <button wire:click="openEditModal({{ $member->id }})"
                                                 type="button"
                                                 class="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
@@ -487,6 +697,68 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
                         @enderror
                     </div>
 
+                    @if (! $editingAdminId)
+                        <div class="space-y-2">
+                            <label class="block text-xs font-semibold text-zinc-900 dark:text-white">Credentials Setup</label>
+                            <div class="grid grid-cols-2 gap-3">
+                                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 cursor-pointer {{ $creationMode === 'invite' ? 'bg-zinc-100 dark:bg-zinc-800 border-zinc-400' : '' }}">
+                                    <input type="radio" wire:model.live="creationMode" value="invite" class="size-3.5 text-zinc-900">
+                                    <span class="text-xs font-medium text-zinc-900 dark:text-white">Send invite link</span>
+                                </label>
+                                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 cursor-pointer {{ $creationMode === 'password' ? 'bg-zinc-100 dark:bg-zinc-800 border-zinc-400' : '' }}">
+                                    <input type="radio" wire:model.live="creationMode" value="password" class="size-3.5 text-zinc-900">
+                                    <span class="text-xs font-medium text-zinc-900 dark:text-white">Set password now</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        @if ($creationMode === 'password')
+                            <div class="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-800/40">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-xs font-semibold text-zinc-900 dark:text-white">Account Password</span>
+                                    <button wire:click="generateStaffPassword" type="button" class="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                                        ⚡ Generate strong password
+                                    </button>
+                                </div>
+
+                                @if ($generatedPassword)
+                                    <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/40">
+                                        <div class="font-semibold text-amber-900 dark:text-amber-200">Generated Password (shown once):</div>
+                                        <div class="mt-1.5 flex items-center justify-between gap-2">
+                                            <code class="rounded bg-white/80 px-2 py-1 font-mono text-xs text-zinc-900 dark:bg-zinc-900 dark:text-white select-all">{{ $generatedPassword }}</code>
+                                            <button type="button"
+                                                    onclick="navigator.clipboard.writeText('{{ $generatedPassword }}'); alert('Password copied to clipboard!');"
+                                                    class="rounded bg-amber-200 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-300 dark:bg-amber-800 dark:text-amber-100">
+                                                Copy
+                                            </button>
+                                        </div>
+                                        <p class="mt-1 text-[10px] text-amber-700 dark:text-amber-400">Copy this password now. It will not be shown again after closing.</p>
+                                    </div>
+                                @endif
+
+                                <div>
+                                    <label for="password" class="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Password</label>
+                                    <input wire:model="password" id="password" type="password" required
+                                           class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-500 focus:outline-hidden dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                    @error('password')
+                                        <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p>
+                                    @enderror
+                                </div>
+
+                                <div>
+                                    <label for="password_confirmation" class="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Confirm Password</label>
+                                    <input wire:model="password_confirmation" id="password_confirmation" type="password" required
+                                           class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-500 focus:outline-hidden dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                </div>
+
+                                <label class="flex items-center gap-2 pt-1 text-xs cursor-pointer">
+                                    <input type="checkbox" wire:model="mustChangePassword" class="size-3.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800" />
+                                    <span class="text-zinc-700 dark:text-zinc-300 font-medium">Require password change on first login</span>
+                                </label>
+                            </div>
+                        @endif
+                    @endif
+
                     @error('selectedRoles')
                         <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
                             {{ $message }}
@@ -523,11 +795,102 @@ new #[Layout('layouts.admin')] #[Title('Staff Management')] class extends Compon
                     </div>
 
                     <div class="flex items-center justify-end gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-800">
-                        <button wire:click="$set('showStaffModal', false)" type="button" class="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                        <button wire:click="closeStaffModal" type="button" class="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                             Cancel
                         </button>
                         <button type="submit" class="rounded-lg bg-zinc-900 px-5 py-2 text-xs font-semibold text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100">
-                            {{ $editingAdminId ? 'Save Changes' : 'Send Invite' }}
+                            {{ $editingAdminId ? 'Save Changes' : ($creationMode === 'password' ? 'Create Staff Member' : 'Send Invite') }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    @endif
+
+    <!-- Staff Reset Password Modal -->
+    @if ($showResetPasswordModal)
+        <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div wire:click="closeResetPasswordModal" class="fixed inset-0 bg-zinc-950/60 backdrop-blur-xs"></div>
+
+            <div class="relative w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 space-y-5">
+                <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+                    <div>
+                        <h3 class="text-base font-bold text-zinc-900 dark:text-white">Reset Staff Password</h3>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400 font-mono">{{ $resetTargetEmail }}</p>
+                    </div>
+                    <button wire:click="closeResetPasswordModal" type="button" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
+                        ✕
+                    </button>
+                </div>
+
+                <form wire:submit="confirmResetPassword" class="space-y-4">
+                    <div class="grid grid-cols-2 gap-3">
+                        <label class="flex items-center gap-2 p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 cursor-pointer {{ $resetMode === 'link' ? 'bg-zinc-100 dark:bg-zinc-800 border-zinc-400' : '' }}">
+                            <input type="radio" wire:model.live="resetMode" value="link" class="size-3.5 text-zinc-900">
+                            <span class="text-xs font-medium text-zinc-900 dark:text-white">Send reset link</span>
+                        </label>
+                        <label class="flex items-center gap-2 p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 cursor-pointer {{ $resetMode === 'password' ? 'bg-zinc-100 dark:bg-zinc-800 border-zinc-400' : '' }}">
+                            <input type="radio" wire:model.live="resetMode" value="password" class="size-3.5 text-zinc-900">
+                            <span class="text-xs font-medium text-zinc-900 dark:text-white">Set new password</span>
+                        </label>
+                    </div>
+
+                    @if ($resetMode === 'password')
+                        <div class="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-800/40">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-semibold text-zinc-900 dark:text-white">New Password</span>
+                                <button wire:click="generateResetPassword" type="button" class="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                                    ⚡ Generate strong password
+                                </button>
+                            </div>
+
+                            @if ($resetGeneratedPassword)
+                                <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/40">
+                                    <div class="font-semibold text-amber-900 dark:text-amber-200">Generated Password (shown once):</div>
+                                    <div class="mt-1.5 flex items-center justify-between gap-2">
+                                        <code class="rounded bg-white/80 px-2 py-1 font-mono text-xs text-zinc-900 dark:bg-zinc-900 dark:text-white select-all">{{ $resetGeneratedPassword }}</code>
+                                        <button type="button"
+                                                onclick="navigator.clipboard.writeText('{{ $resetGeneratedPassword }}'); alert('Password copied to clipboard!');"
+                                                class="rounded bg-amber-200 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-300 dark:bg-amber-800 dark:text-amber-100">
+                                            Copy
+                                        </button>
+                                    </div>
+                                    <p class="mt-1 text-[10px] text-amber-700 dark:text-amber-400">Copy this password now. It will not be shown again after closing.</p>
+                                </div>
+                            @endif
+
+                            <div>
+                                <label for="newPassword" class="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Password</label>
+                                <input wire:model="newPassword" id="newPassword" type="password" required
+                                       class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-500 focus:outline-hidden dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                @error('newPassword')
+                                    <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            <div>
+                                <label for="newPassword_confirmation" class="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Confirm Password</label>
+                                <input wire:model="newPassword_confirmation" id="newPassword_confirmation" type="password" required
+                                       class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs text-zinc-900 focus:border-zinc-500 focus:outline-hidden dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                            </div>
+
+                            <label class="flex items-center gap-2 pt-1 text-xs cursor-pointer">
+                                <input type="checkbox" wire:model="resetMustChangePassword" class="size-3.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800" />
+                                <span class="text-zinc-700 dark:text-zinc-300 font-medium">Require password change on next login</span>
+                            </label>
+                        </div>
+                    @else
+                        <p class="text-xs text-zinc-600 dark:text-zinc-400">
+                            An email containing a secure password reset link will be sent to <strong>{{ $resetTargetEmail }}</strong>.
+                        </p>
+                    @endif
+
+                    <div class="flex items-center justify-end gap-3 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+                        <button wire:click="closeResetPasswordModal" type="button" class="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                            Cancel
+                        </button>
+                        <button type="submit" class="rounded-lg bg-zinc-900 px-5 py-2 text-xs font-semibold text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100">
+                            {{ $resetMode === 'link' ? 'Send Reset Link' : 'Save New Password' }}
                         </button>
                     </div>
                 </form>

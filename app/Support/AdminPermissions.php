@@ -8,13 +8,19 @@ class AdminPermissions
 
     public const ADMINS_MANAGE = 'admins.manage';
 
+    public const ADMINS_PASSWORD = 'admins.password';
+
     public const ROLES_MANAGE = 'roles.manage';
 
     public const AUDIT_VIEW = 'audit.view';
 
     public const CUSTOMERS_VIEW = 'customers.view';
 
+    public const CUSTOMERS_CREATE = 'customers.create';
+
     public const CUSTOMERS_MANAGE = 'customers.manage';
+
+    public const CUSTOMERS_PASSWORD = 'customers.password';
 
     public const SELLERS_VIEW = 'sellers.view';
 
@@ -53,6 +59,10 @@ class AdminPermissions
                     'label' => 'Manage Staff',
                     'description' => 'Invite, edit, assign roles, and activate/deactivate staff.',
                 ],
+                self::ADMINS_PASSWORD => [
+                    'label' => 'Reset Staff Passwords',
+                    'description' => 'Reset staff passwords directly or send password reset links.',
+                ],
                 self::ROLES_MANAGE => [
                     'label' => 'Manage Roles',
                     'description' => 'Create, edit, and delete roles and configure permission sets.',
@@ -68,9 +78,17 @@ class AdminPermissions
                     'label' => 'View Customers',
                     'description' => 'View customer directory and individual customer details.',
                 ],
+                self::CUSTOMERS_CREATE => [
+                    'label' => 'Create Customers',
+                    'description' => 'Create new customer accounts with set password or welcome link.',
+                ],
                 self::CUSTOMERS_MANAGE => [
                     'label' => 'Manage Customers',
                     'description' => 'Activate or deactivate customer accounts.',
+                ],
+                self::CUSTOMERS_PASSWORD => [
+                    'label' => 'Reset Customer Passwords',
+                    'description' => 'Reset customer passwords directly or send password reset links.',
                 ],
             ],
 

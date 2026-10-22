@@ -19,13 +19,14 @@ use Spatie\Permission\Traits\HasRoles;
  * @property string $name
  * @property string $email
  * @property string $password
+ * @property bool $must_change_password
  * @property bool $is_active
  * @property Carbon|null $invitation_accepted_at
  * @property string|null $remember_token
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['name', 'email', 'password', 'is_active', 'invitation_accepted_at'])]
+#[Fillable(['name', 'email', 'password', 'invitation_accepted_at'])]
 #[Hidden(['password', 'remember_token'])]
 class Admin extends Authenticatable
 {
@@ -46,6 +47,7 @@ class Admin extends Authenticatable
     {
         return [
             'password' => 'hashed',
+            'must_change_password' => 'boolean',
             'is_active' => 'boolean',
             'invitation_accepted_at' => 'datetime',
         ];

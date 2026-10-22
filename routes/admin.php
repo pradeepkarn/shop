@@ -1,7 +1,9 @@
 <?php
 
 use App\Http\Controllers\Admin\AdminSellerDocumentController;
+use App\Http\Middleware\AuthenticateAdminSession;
 use App\Http\Middleware\EnsureAdminIsActive;
+use App\Http\Middleware\EnsureAdminPasswordChanged;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -11,8 +13,9 @@ Route::middleware('guest:admin')->group(function () {
     Route::livewire('set-password/{token}', 'pages::admin.auth.set-password')->name('password.set');
 });
 
-Route::middleware(['auth:admin', EnsureAdminIsActive::class])->group(function () {
+Route::middleware(['auth:admin', EnsureAdminIsActive::class, AuthenticateAdminSession::class, EnsureAdminPasswordChanged::class])->group(function () {
     Route::livewire('/', 'pages::admin.dashboard')->name('dashboard');
+    Route::livewire('force-change-password', 'pages::admin.auth.force-change-password')->name('password.force-change');
 
     // Customers
     Route::livewire('customers', 'pages::admin.customers')->name('customers')->middleware('can:customers.view');
