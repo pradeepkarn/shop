@@ -57,6 +57,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function openCreateModal(): void
     {
+        $this->authorize('catalog.attributes');
+
         $this->reset(['name', 'code', 'type', 'unit', 'is_required', 'is_variant', 'editingAttributeId', 'isEditingLocked']);
         $this->type = 'text';
         $this->sort_order = ($this->vertical->attributes()->max('sort_order') ?? 0) + 1;
@@ -65,6 +67,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function openEditModal(int $id): void
     {
+        $this->authorize('catalog.attributes');
+
         $attr = VerticalAttribute::where('vertical_id', $this->vertical->id)->findOrFail($id);
         $this->editingAttributeId = $attr->id;
         $this->name = $attr->name;
@@ -80,6 +84,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function saveAttribute(): void
     {
+        $this->authorize('catalog.attributes');
+
         $this->validate();
 
         if ($this->editingAttributeId) {
@@ -149,6 +155,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function openOptionsModal(int $id): void
     {
+        $this->authorize('catalog.attributes');
+
         $this->managingOptionsAttribute = VerticalAttribute::where('vertical_id', $this->vertical->id)->findOrFail($id);
         $this->reset(['new_option_label', 'new_option_value']);
         $this->showOptionsModal = true;
@@ -163,6 +171,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function addOption(): void
     {
+        $this->authorize('catalog.attributes');
+
         $this->validate([
             'new_option_label' => ['required', 'string', 'min:1', 'max:100'],
             'new_option_value' => ['required', 'string', 'min:1', 'max:100'],
@@ -198,6 +208,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function toggleOptionActive(int $index): void
     {
+        $this->authorize('catalog.attributes');
+
         if (! $this->managingOptionsAttribute) {
             return;
         }
@@ -212,8 +224,33 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
         $this->managingOptionsAttribute->refresh();
     }
 
+    public function toggleOptionRetired(int $index): void
+    {
+        $this->authorize('catalog.attributes');
+
+        if (! $this->managingOptionsAttribute) {
+            return;
+        }
+
+        $options = $this->managingOptionsAttribute->options ?? [];
+        if (! isset($options[$index])) {
+            return;
+        }
+
+        $isRetired = ! empty($options[$index]['is_retired']);
+        $options[$index]['is_retired'] = ! $isRetired;
+        if (! $isRetired) {
+            $options[$index]['is_active'] = false;
+        }
+
+        $this->managingOptionsAttribute->update(['options' => $options]);
+        $this->managingOptionsAttribute->refresh();
+    }
+
     public function removeOption(int $index): void
     {
+        $this->authorize('catalog.attributes');
+
         if (! $this->managingOptionsAttribute) {
             return;
         }
@@ -225,9 +262,9 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
         $optionValue = $options[$index]['value'];
 
-        // Enforce integrity rule: used options CANNOT be removed; they must be hidden/deactivated
+        // Enforce immutability rule: option slugs used by variants are immutable and cannot be deleted
         if ($this->managingOptionsAttribute->isOptionUsed($optionValue)) {
-            session()->flash('options_error', "Cannot delete option '{$options[$index]['label']}' because it is in use by catalog products. Deactivate it instead to hide it from new products.");
+            session()->flash('options_error', "Option slug '{$optionValue}' is immutable because it is used by product variants. It cannot be deleted. Deactivate or retire it instead.");
 
             return;
         }
@@ -239,6 +276,8 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
 
     public function deleteAttribute(int $id): void
     {
+        $this->authorize('catalog.attributes');
+
         $attr = VerticalAttribute::where('vertical_id', $this->vertical->id)->findOrFail($id);
 
         if ($attr->isUsedInProducts()) {
@@ -548,21 +587,32 @@ new #[Layout('layouts.admin')] #[Title('Vertical Attributes Builder')] class ext
                     @forelse ($managingOptionsAttribute->options ?? [] as $index => $opt)
                         @php
                             $isActive = $opt['is_active'] ?? true;
+                            $isRetired = ! empty($opt['is_retired']);
                             $isOptUsed = $managingOptionsAttribute->isOptionUsed($opt['value']);
                         @endphp
-                        <div wire:key="opt-{{ $index }}" class="flex items-center justify-between px-3 py-2 text-xs">
+                        <div wire:key="opt-{{ $index }}" class="flex items-center justify-between px-3 py-2 text-xs {{ $isRetired ? 'bg-red-50/50 dark:bg-red-950/20' : '' }}">
                             <div class="flex items-center gap-2">
-                                <span class="font-medium text-zinc-900 dark:text-white">{{ $opt['label'] }}</span>
+                                <span class="font-medium text-zinc-900 dark:text-white {{ $isRetired ? 'line-through text-zinc-400' : '' }}">{{ $opt['label'] }}</span>
                                 <span class="font-mono text-zinc-400 text-[11px]">({{ $opt['value'] }})</span>
                                 @if ($isOptUsed)
                                     <span class="text-[10px] text-amber-600 font-semibold">(used)</span>
+                                @endif
+                                @if ($isRetired)
+                                    <span class="text-[10px] text-red-600 font-semibold uppercase">[Retired]</span>
                                 @endif
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <button wire:click="toggleOptionActive({{ $index }})" type="button"
-                                        class="rounded px-2 py-0.5 text-[11px] font-semibold transition {{ $isActive ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400' }}">
+                                        class="rounded px-2 py-0.5 text-[11px] font-semibold transition {{ $isActive ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400' }}"
+                                        title="{{ $isActive ? 'Visible for new products' : 'Hidden from new products' }}">
                                     {{ $isActive ? 'Active' : 'Hidden' }}
+                                </button>
+
+                                <button wire:click="toggleOptionRetired({{ $index }})" type="button"
+                                        class="rounded px-2 py-0.5 text-[11px] font-semibold transition {{ $isRetired ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' : 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/50 dark:text-amber-300' }}"
+                                        title="{{ $isRetired ? 'Un-retire option' : 'Retire option (flags existing products using it)' }}">
+                                    {{ $isRetired ? 'Retired' : 'Retire' }}
                                 </button>
 
                                 @if (! $isOptUsed)

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use App\Services\AdminActivityLogger;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
@@ -20,9 +21,17 @@ new #[Layout('layouts.admin')] #[Title('Customers')] class extends Component {
 
     public function toggleActive(int $userId): void
     {
+        $this->authorize('customers.manage');
+
         $customer = User::findOrFail($userId);
         $customer->is_active = ! $customer->is_active;
         $customer->save();
+
+        AdminActivityLogger::log($customer->is_active ? 'customer.activated' : 'customer.deactivated', $customer, [
+            'user_id' => $customer->id,
+            'email' => $customer->email,
+            'is_active' => $customer->is_active,
+        ]);
 
         session()->flash('status', "Customer [{$customer->email}] status updated to ".($customer->is_active ? 'active' : 'inactive').'.');
     }

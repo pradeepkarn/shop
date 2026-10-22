@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use App\Services\AdminActivityLogger;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -15,8 +16,16 @@ new #[Layout('layouts.admin')] #[Title('Customer Details')] class extends Compon
 
     public function toggleActive(): void
     {
+        $this->authorize('customers.manage');
+
         $this->user->is_active = ! $this->user->is_active;
         $this->user->save();
+
+        AdminActivityLogger::log($this->user->is_active ? 'customer.activated' : 'customer.deactivated', $this->user, [
+            'user_id' => $this->user->id,
+            'email' => $this->user->email,
+            'is_active' => $this->user->is_active,
+        ]);
 
         session()->flash('status', 'Customer status updated to '.($this->user->is_active ? 'active' : 'inactive').'.');
     }
