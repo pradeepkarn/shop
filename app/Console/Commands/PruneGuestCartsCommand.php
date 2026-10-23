@@ -44,4 +44,3 @@ class PruneGuestCartsCommand extends Command
         return Command::SUCCESS;
     }
 }
-

@@ -25,4 +25,3 @@ class MergeGuestCartOnLogin
         $this->cartService->mergeGuestIntoUser($event->user);
     }
 }
-

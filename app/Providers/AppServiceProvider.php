@@ -8,15 +8,12 @@ use App\Http\Middleware\EnsureAdminPasswordChanged;
 use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\EnsureUserIsApprovedSeller;
 use App\Http\Middleware\EnsureUserPasswordChanged;
-use App\Listeners\MergeGuestCartOnLogin;
 use App\Models\Admin;
 use App\Services\CartService;
 use Carbon\CarbonImmutable;
-use Illuminate\Auth\Events\Login;
 use Illuminate\Session\Middleware\AuthenticateSession;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
@@ -29,7 +26,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->singleton(CartService::class);
+        $this->app->scoped(CartService::class);
     }
 
     /**
@@ -46,8 +43,6 @@ class AppServiceProvider extends ServiceProvider
 
             return null;
         });
-
-        Event::listen(Login::class, MergeGuestCartOnLogin::class);
 
         Livewire::addPersistentMiddleware([
             AuthenticateSession::class,

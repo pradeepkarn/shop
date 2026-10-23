@@ -373,3 +373,36 @@ test('cart supports seller grouping, price updates, acknowledge, and clearing', 
     $cartService->clear();
     expect($cartService->count())->toBe(0);
 });
+
+test('cart service is registered as scoped and resolves different instances across requests', function () {
+    // Within the same request scope, resolving twice returns the exact same instance
+    $instance1a = app(CartService::class);
+    $instance1b = app(CartService::class);
+    expect($instance1a)->toBe($instance1b);
+
+    // Forget scoped instances to simulate the boundary between requests (e.g. under Octane/workers)
+    app()->forgetScopedInstances();
+
+    $instance2 = app(CartService::class);
+    expect($instance2)->not->toBeNull();
+    expect($instance2)->not->toBe($instance1a);
+});
+
+test('customer login merges guest cart exactly once and admin login is ignored', function () {
+    $customer = User::factory()->create();
+    $admin = Admin::factory()->create();
+
+    $mock = Mockery::mock(CartService::class);
+    // Must be called exactly once for customer login, never for admin login
+    $mock->shouldReceive('mergeGuestIntoUser')
+        ->once()
+        ->with(Mockery::on(fn ($user) => $user instanceof User && $user->id === $customer->id));
+
+    app()->instance(CartService::class, $mock);
+
+    // 1. Admin login must be completely ignored
+    event(new Login('admin', $admin, false));
+
+    // 2. Customer login must trigger the merge exactly once
+    event(new Login('web', $customer, false));
+});
