@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\SellerStatus;
 use App\Exceptions\InvalidSellerStatusTransitionException;
+use App\Services\ProductBuyBoxService;
 use Carbon\CarbonImmutable;
 use Database\Factories\SellerProfileFactory;
 use Illuminate\Database\Eloquent\Collection;
@@ -11,6 +12,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -311,6 +313,21 @@ class SellerProfile extends Model
     {
         static::deleting(function (SellerProfile $profile): void {
             $profile->deleteFiles();
+        });
+
+        static::saved(function (SellerProfile $seller) {
+            if ($seller->wasChanged('status')) {
+                $productIds = DB::table('listings')
+                    ->join('product_variants', 'listings.product_variant_id', '=', 'product_variants.id')
+                    ->where('listings.seller_profile_id', $seller->id)
+                    ->pluck('product_variants.product_id')
+                    ->unique();
+
+                $service = app(ProductBuyBoxService::class);
+                foreach ($productIds as $pId) {
+                    $service->refresh($pId);
+                }
+            }
         });
     }
 }
