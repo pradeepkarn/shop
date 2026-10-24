@@ -42,6 +42,10 @@ class AdminPermissions
 
     public const CATALOG_QC = 'catalog.qc';
 
+    public const ORDERS_VIEW = 'orders.view';
+
+    public const ORDERS_MANAGE = 'orders.manage';
+
     /**
      * Get all registered permissions grouped by module.
      *
@@ -138,6 +142,17 @@ class AdminPermissions
                 self::CATALOG_QC => [
                     'label' => 'Product QC & Approvals',
                     'description' => 'Approve or reject product submissions, variants, and pending changes.',
+                ],
+            ],
+
+            'Orders' => [
+                self::ORDERS_VIEW => [
+                    'label' => 'View Orders',
+                    'description' => 'Inspect customer orders, seller fulfillment breakdown, and items audit.',
+                ],
+                self::ORDERS_MANAGE => [
+                    'label' => 'Manage Orders',
+                    'description' => 'Override order statuses, issue refunds, and manage disputes.',
                 ],
             ],
         ];

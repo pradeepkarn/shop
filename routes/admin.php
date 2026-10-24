@@ -33,6 +33,10 @@ Route::middleware(['auth:admin', EnsureAdminIsActive::class, AuthenticateAdminSe
     Route::livewire('catalog/brands', 'pages::admin.catalog.brands')->name('catalog.brands')->middleware('can:catalog.brands.manage');
     Route::livewire('catalog/products', 'pages::admin.catalog.products')->name('catalog.products')->middleware('can:catalog.products.view');
 
+    // Orders
+    Route::livewire('orders', 'pages::admin.orders-index')->name('orders.index')->middleware('can:orders.view');
+    Route::livewire('orders/{order}', 'pages::admin.orders-show')->name('orders.show')->middleware('can:orders.view');
+
     // Staff & Roles Management
     Route::livewire('staff', 'pages::admin.staff')->name('staff')->middleware('can:admins.view');
     Route::livewire('roles', 'pages::admin.roles')->name('roles')->middleware('can:roles.manage');

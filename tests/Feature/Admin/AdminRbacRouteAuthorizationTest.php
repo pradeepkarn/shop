@@ -6,8 +6,13 @@ use App\Models\SellerDocument;
 use App\Models\SellerProfile;
 use App\Models\User;
 use App\Models\Vertical;
+use App\Orders\Enums\OrderStatus;
+use App\Orders\Enums\PaymentMethod;
+use App\Orders\Enums\PaymentStatus;
+use App\Orders\Models\Order;
 use App\Support\AdminPermissions;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -50,6 +55,35 @@ function getRouteParam(string $routeName): array
                 ]);
             })(),
         ],
+        'admin.orders.show' => [
+            'order' => (function () {
+                $user = User::factory()->create();
+
+                return Order::create([
+                    'order_number' => 'KH-20261024-TEST01',
+                    'user_id' => $user->id,
+                    'checkout_intent_id' => (string) Str::ulid(),
+                    'status' => OrderStatus::Placed,
+                    'delivery_address' => [
+                        'name' => 'Test User',
+                        'phone' => '9876543210',
+                        'address_line' => '123 Test St',
+                        'locality' => 'Test',
+                        'city' => 'Bengaluru',
+                        'state' => 'Karnataka',
+                        'pincode' => '560001',
+                    ],
+                    'delivery_state' => 'Karnataka',
+                    'payment_method' => PaymentMethod::CashOnDelivery,
+                    'payment_status' => PaymentStatus::Pending,
+                    'items_mrp_total' => 10000,
+                    'discount_total' => 2000,
+                    'delivery_fee' => 0,
+                    'grand_total' => 8000,
+                    'placed_at' => now(),
+                ]);
+            })(),
+        ],
         default => [],
     };
 }
@@ -65,6 +99,8 @@ dataset('admin_protected_routes', [
     ['admin.catalog.vertical-attributes', AdminPermissions::CATALOG_ATTRIBUTES],
     ['admin.catalog.brands', AdminPermissions::CATALOG_BRANDS_MANAGE],
     ['admin.catalog.products', AdminPermissions::CATALOG_PRODUCTS_VIEW],
+    ['admin.orders.index', AdminPermissions::ORDERS_VIEW],
+    ['admin.orders.show', AdminPermissions::ORDERS_VIEW],
     ['admin.staff', AdminPermissions::ADMINS_VIEW],
     ['admin.roles', AdminPermissions::ROLES_MANAGE],
     ['admin.activity-logs', AdminPermissions::AUDIT_VIEW],

@@ -30,6 +30,10 @@ new #[Layout('layouts.admin')] #[Title('Review Seller Application')] class exten
 
     public function maskKycField(?string $value): string
     {
+        if ($this->sellerProfile->isAnonymized()) {
+            return '—';
+        }
+
         if (blank($value)) {
             return 'None';
         }
@@ -299,11 +303,17 @@ new #[Layout('layouts.admin')] #[Title('Review Seller Application')] class exten
             </div>
             <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-800/30">
                 <dt class="text-zinc-500">Beneficiary Name</dt>
-                <dd class="mt-1 font-semibold text-zinc-900 dark:text-white">{{ $sellerProfile->bank_account_holder }}</dd>
+                <dd class="mt-1 font-semibold text-zinc-900 dark:text-white">{{ $sellerProfile->isAnonymized() ? '—' : $sellerProfile->bank_account_holder }}</dd>
             </div>
             <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-3 dark:border-zinc-800/80 dark:bg-zinc-800/30">
                 <dt class="text-zinc-500">Account Number & IFSC</dt>
-                <dd class="mt-1 font-semibold text-zinc-900 dark:text-white" data-test="bank-account-value">{{ $this->maskKycField($sellerProfile->bank_account_number) }} ({{ $sellerProfile->ifsc }})</dd>
+                <dd class="mt-1 font-semibold text-zinc-900 dark:text-white" data-test="bank-account-value">
+                    @if ($sellerProfile->isAnonymized())
+                        —
+                    @else
+                        {{ $this->maskKycField($sellerProfile->bank_account_number) }} ({{ $sellerProfile->ifsc }})
+                    @endif
+                </dd>
             </div>
         </dl>
     </div>

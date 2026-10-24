@@ -4,6 +4,8 @@ namespace App\Models;
 
 use App\Enums\SellerStatus;
 use App\Exceptions\InvalidSellerStatusTransitionException;
+use App\Orders\Enums\SellerOrderStatus;
+use App\Orders\Models\SellerOrder;
 use App\Services\ProductBuyBoxService;
 use Carbon\CarbonImmutable;
 use Database\Factories\SellerProfileFactory;
@@ -307,11 +309,42 @@ class SellerProfile extends Model
     }
 
     /**
+     * @return HasMany<SellerOrder, $this>
+     */
+    public function sellerOrders(): HasMany
+    {
+        return $this->hasMany(SellerOrder::class);
+    }
+
+    /**
+     * Check if seller has open orders preventing account deletion.
+     */
+    public function hasOpenOrders(): bool
+    {
+        return $this->sellerOrders()
+            ->whereNotIn('status', [SellerOrderStatus::Delivered->value, SellerOrderStatus::Cancelled->value])
+            ->exists();
+    }
+
+    /**
+     * Check if the seller profile has been anonymized upon account deletion.
+     */
+    public function isAnonymized(): bool
+    {
+        return $this->store_name === 'Deleted seller'
+            || $this->user->name === 'Deleted user';
+    }
+
+    /**
      * The "booted" method of the model.
      */
     protected static function booted(): void
     {
         static::deleting(function (SellerProfile $profile): void {
+            if ($profile->hasOpenOrders()) {
+                throw new \DomainException('Cannot delete seller account with active or undelivered orders.');
+            }
+
             $profile->deleteFiles();
         });
 

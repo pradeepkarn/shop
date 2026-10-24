@@ -36,6 +36,12 @@ Route::livewire('checkout/{intent}', 'pages::storefront.checkout-summary')
     ->middleware('auth')
     ->name('checkout.show');
 
+Route::middleware('auth')->group(function () {
+    Route::livewire('orders', 'pages::storefront.order-index')->name('orders.index');
+    Route::livewire('orders/{order}/success', 'pages::storefront.order-success')->name('orders.success');
+    Route::livewire('orders/{order}', 'pages::storefront.order-show')->name('orders.show');
+});
+
 Route::livewire('welcome/{token}', 'pages::auth.welcome')->name('welcome');
 
 Route::livewire('force-change-password', 'pages::auth.force-change-password')
