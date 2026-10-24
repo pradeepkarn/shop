@@ -7,9 +7,10 @@ use App\Orders\Models\SellerOrder;
 use App\Orders\Services\OrderService;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Title;
 use Livewire\Component;
 
-new #[Layout('layouts.storefront')] class extends Component {
+new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
     public string $orderNumber;
 
     public ?string $cancellingSellerOrderId = null;
@@ -217,6 +218,16 @@ new #[Layout('layouts.storefront')] class extends Component {
                                 </div>
                             </div>
                         @endforeach
+                    </div>
+
+                    <!-- Package Total Footer -->
+                    <div class="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-800 flex justify-between items-center text-xs">
+                        <span class="text-zinc-500 dark:text-zinc-400">
+                            Package Total ({{ $sellerOrder->items->sum('qty') }} {{ $sellerOrder->items->sum('qty') === 1 ? 'unit' : 'units' }}):
+                        </span>
+                        <span class="font-extrabold text-zinc-900 dark:text-white text-sm">
+                            ₹{{ number_format($sellerOrder->grand_total / 100) }}
+                        </span>
                     </div>
 
                     <!-- Status History / Timeline Notes -->

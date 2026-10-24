@@ -7,20 +7,14 @@ use App\Checkout\Services\CheckoutIntentService;
 use App\Models\CustomerAddress;
 use App\Orders\DTOs\PlaceOrderData;
 use App\Orders\Services\OrderService;
+use App\Support\CustomerAddressRules;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Component;
 
 new #[Layout('layouts.storefront')] class extends Component {
-    public const STATES = [
-        'Andaman and Nicobar Islands', 'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar',
-        'Chandigarh', 'Chhattisgarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Goa',
-        'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jammu and Kashmir', 'Jharkhand', 'Karnataka',
-        'Kerala', 'Ladakh', 'Lakshadweep', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya',
-        'Mizoram', 'Nagaland', 'Odisha', 'Puducherry', 'Punjab', 'Rajasthan', 'Sikkim',
-        'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
-    ];
+    public const STATES = CustomerAddressRules::STATES;
 
     public string $intentId;
 
@@ -126,7 +120,8 @@ new #[Layout('layouts.storefront')] class extends Component {
 
     public function deliverHere(): void
     {
-        if (! $this->selectedAddressId) {
+        if (! $this->selectedAddressId || CustomerAddress::where('id', $this->selectedAddressId)->doesntExist()) {
+            $this->selectedAddressId = null;
             session()->flash('checkout_error', 'Please select or add a delivery address to continue.');
 
             return;
@@ -137,22 +132,10 @@ new #[Layout('layouts.storefront')] class extends Component {
 
     public function saveNewAddress(): void
     {
-        $this->validate([
-            'addressName' => ['required', 'string', 'max:100'],
-            'addressPhone' => ['required', 'string', 'regex:/^[6-9]\d{9}$/'],
-            'addressPincode' => ['required', 'string', 'regex:/^\d{6}$/'],
-            'addressLocality' => ['required', 'string', 'max:150'],
-            'addressLine' => ['required', 'string', 'max:255'],
-            'addressCity' => ['required', 'string', 'max:100'],
-            'addressState' => ['required', 'string', Rule::in(self::STATES)],
-            'addressLandmark' => ['nullable', 'string', 'max:150'],
-            'addressAlternatePhone' => ['nullable', 'string', 'regex:/^[6-9]\d{9}$/'],
-            'addressType' => ['required', Rule::in(['home', 'work'])],
-        ], [
-            'addressPhone.regex' => 'Please enter a valid 10-digit Indian mobile number.',
-            'addressPincode.regex' => 'Please enter a valid 6-digit PIN code.',
-            'addressAlternatePhone.regex' => 'Please enter a valid 10-digit mobile number.',
-        ]);
+        $this->validate(
+            CustomerAddressRules::rules('address'),
+            CustomerAddressRules::messages('address')
+        );
 
         if ($this->addressIsDefault) {
             auth()->user()->addresses()->update(['is_default' => false]);
@@ -235,9 +218,10 @@ new #[Layout('layouts.storefront')] class extends Component {
 
     public function confirmOrder(OrderService $orderService): void
     {
-        if (! $this->selectedAddressId) {
-            session()->flash('checkout_error', 'Please select a delivery address before confirming your order.');
+        if (! $this->selectedAddressId || CustomerAddress::where('id', $this->selectedAddressId)->doesntExist()) {
+            $this->selectedAddressId = null;
             $this->currentStep = 2;
+            session()->flash('checkout_error', 'Please select a delivery address before confirming your order.');
 
             return;
         }

@@ -5,10 +5,11 @@ namespace App\Livewire\Storefront;
 use App\Orders\Models\Order;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Title;
 use Livewire\Component;
 use Livewire\WithPagination;
 
-new #[Layout('layouts.storefront')] class extends Component {
+new #[Layout('layouts.app')] #[Title('My Orders')] class extends Component {
     use WithPagination;
 
     #[Computed]
