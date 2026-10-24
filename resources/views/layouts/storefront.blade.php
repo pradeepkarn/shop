@@ -42,8 +42,10 @@
                 </nav>
             </div>
 
-            <!-- Customer Account / Auth Links -->
+            <!-- Cart & Customer Account / Auth Links -->
             <div class="flex items-center gap-3">
+                <livewire:header-cart-badge />
+
                 @auth
                     <a href="{{ route('dashboard') }}" class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3.5 py-1.5 text-sm font-medium text-zinc-800 shadow-xs hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition" wire:navigate>
                         <svg class="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">

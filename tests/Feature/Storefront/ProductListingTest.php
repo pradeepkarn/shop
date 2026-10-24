@@ -586,7 +586,7 @@ test('product card links to product show with buy box upid and has no add to car
         ->assertDontSee('Add to Cart')
         ->assertDontSee('add-to-cart');
 
-    // Also test product show page loads with correct details and NO Add to Cart
+    // Also test product show page loads with correct details and buttons
     Livewire::test('pages::storefront.product-show', [
         'slug' => 'lego-space-station-kit',
         'upid' => 'KP1234567890',
@@ -596,8 +596,8 @@ test('product card links to product show with buy box upid and has no add to car
         ->assertSee('₹10,000')
         ->assertSee('20% OFF')
         ->assertSee('In Stock')
-        ->assertDontSee('Add to cart')
-        ->assertDontSee('Add to Cart');
+        ->assertSee('ADD TO CART')
+        ->assertSee('BUY NOW');
 });
 
 test('seeding database with CatalogSeeder and ProductSeeder passes catalog audit with 0 violations', function () {

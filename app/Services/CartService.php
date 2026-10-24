@@ -320,6 +320,16 @@ class CartService
     }
 
     /**
+     * Check if a listing is currently in the active cart.
+     */
+    public function hasListing(int $listingId): bool
+    {
+        $cart = $this->currentCart();
+
+        return $cart ? $cart->items()->where('listing_id', $listingId)->exists() : false;
+    }
+
+    /**
      * Full cart grouped by seller. Re-syncs prices/stock from live listings when the
      * snapshot is older than STALE_AFTER_SECONDS (or always when $force, e.g. before checkout).
      *
