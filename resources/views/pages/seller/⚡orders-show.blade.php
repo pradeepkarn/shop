@@ -130,7 +130,12 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
         </div>
     @endif
 
-    @php $sellerOrder = $this->order; @endphp
+    @php
+        $sellerOrder = $this->order;
+        $feeLookup = app(App\Fees\Contracts\OrderItemFeeSnapshotLookupInterface::class);
+        $feeSummary = $sellerOrder ? $feeLookup->getSellerOrderFeeSummary($sellerOrder->id, $sellerOrder->seller_profile_id) : null;
+        $itemSnapshots = $sellerOrder ? collect($feeLookup->getSnapshotsForSellerOrder($sellerOrder->id, $sellerOrder->seller_profile_id))->keyBy(fn ($s) => $s->orderItemId) : collect();
+    @endphp
 
     <!-- Header Section with Action Buttons -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
@@ -265,6 +270,24 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                                 </p>
                             </div>
                         </div>
+
+                        @if ($itemSnapshots->has($item->id))
+                            @php $snap = $itemSnapshots->get($item->id); @endphp
+                            <div class="px-6 pb-4 pt-1">
+                                <div class="rounded-xl border border-zinc-100 bg-zinc-50/75 p-3 text-xs dark:border-zinc-800 dark:bg-zinc-800/40">
+                                    <div class="flex items-center justify-between font-semibold">
+                                        <span class="text-emerald-700 dark:text-emerald-400">Net Item Payout: {{ $snap->netPayout->format() }}</span>
+                                        <span class="text-zinc-500 font-mono text-[11px]">Total Deductions: -{{ $snap->totalDeductions->format() }}</span>
+                                    </div>
+                                    <div class="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] text-zinc-500">
+                                        <div>Commission: <span class="font-mono text-red-600">-{{ $snap->commission->format() }}</span></div>
+                                        <div>Closing Fee: <span class="font-mono text-red-600">-{{ $snap->closingFee->format() }}</span></div>
+                                        <div>Shipping Fee: <span class="font-mono text-red-600">-{{ $snap->shippingFee->format() }}</span></div>
+                                        <div>Taxes (GST+TCS+TDS): <span class="font-mono text-red-600">-{{ $snap->claimableCredits->format() }}</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                        @endif
                     @endforeach
                 </div>
             </div>
@@ -295,20 +318,76 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
 
         <!-- Right: Order Value & Delivery Info -->
         <div class="lg:col-span-1 space-y-6">
-            <!-- Order Value Card -->
+            <!-- Order Value & Package Deductions Card -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-3">
                 <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-3 dark:border-zinc-800">
-                    Order Value
+                    Package Value & Deductions
                 </h3>
                 <div class="flex items-baseline justify-between">
-                    <span class="text-xs text-zinc-600 dark:text-zinc-400">Order value</span>
-                    <span class="text-xl font-extrabold text-zinc-900 dark:text-white">
-                        ₹{{ number_format($sellerOrder->grand_total / 100) }}
+                    <span class="text-xs text-zinc-600 dark:text-zinc-400">Gross Package Value</span>
+                    <span class="text-lg font-bold text-zinc-900 dark:text-white">
+                        ₹{{ number_format($sellerOrder->grand_total / 100, 2) }}
                     </span>
                 </div>
-                <div class="text-[11px] text-zinc-400 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                    All prices are GST-inclusive.
-                </div>
+
+                @if ($feeSummary)
+                    <div class="pt-2 border-t border-zinc-100 dark:border-zinc-800 space-y-2 text-xs">
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Marketplace Commission</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->commissionTotal->format() }}</span>
+                        </div>
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Fixed Closing Fees</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->closingFeeTotal->format() }}</span>
+                        </div>
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Package Shipping Fee</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->shippingFeeTotal->format() }}</span>
+                        </div>
+                        @if ($feeSummary->collectionFeeTotal->isPositive())
+                            <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                                <span>Collection Fee</span>
+                                <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->collectionFeeTotal->format() }}</span>
+                            </div>
+                        @endif
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>GST on Fees (18%)</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->gstOnFeesTotal->format() }}</span>
+                        </div>
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>GST TCS (0.5%)</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->tcsTotal->format() }}</span>
+                        </div>
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Income Tax TDS (0.1%)</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->tdsTotal->format() }}</span>
+                        </div>
+
+                        <div class="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex justify-between font-bold text-zinc-900 dark:text-white">
+                            <span>Total Deductions</span>
+                            <span class="font-mono text-red-600 dark:text-red-400">-{{ $feeSummary->totalDeductions->format() }}</span>
+                        </div>
+
+                        <div class="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 mt-3">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">Net Bank Payout</span>
+                            <div class="text-xl font-extrabold text-emerald-900 dark:text-emerald-200 mt-0.5">
+                                {{ $feeSummary->netPayout->format() }}
+                            </div>
+                        </div>
+
+                        <div class="rounded-xl bg-blue-50 p-3 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-blue-800 dark:text-blue-300">Claimable Tax Credits</span>
+                            <div class="text-sm font-bold text-blue-900 dark:text-blue-200 mt-0.5">
+                                {{ $feeSummary->claimableCredits->format() }}
+                            </div>
+                            <p class="text-[10px] text-blue-600 dark:text-blue-400 mt-0.5">GST ITC + TCS cash ledger + TDS 26AS</p>
+                        </div>
+                    </div>
+                @else
+                    <div class="text-[11px] text-zinc-400 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                        All prices are GST-inclusive.
+                    </div>
+                @endif
             </div>
 
             <!-- Customer Destination -->

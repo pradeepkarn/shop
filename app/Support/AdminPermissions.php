@@ -46,6 +46,10 @@ class AdminPermissions
 
     public const ORDERS_MANAGE = 'orders.manage';
 
+    public const FEES_VIEW = 'fees.view';
+
+    public const FEES_MANAGE = 'fees.manage';
+
     /**
      * Get all registered permissions grouped by module.
      *
@@ -153,6 +157,17 @@ class AdminPermissions
                 self::ORDERS_MANAGE => [
                     'label' => 'Manage Orders',
                     'description' => 'Override order statuses, issue refunds, and manage disputes.',
+                ],
+            ],
+
+            'Fees & Commissions' => [
+                self::FEES_VIEW => [
+                    'label' => 'View Fee Schedules',
+                    'description' => 'Inspect marketplace fee schedules, commission slabs, and calculation rules.',
+                ],
+                self::FEES_MANAGE => [
+                    'label' => 'Manage Fee Schedules',
+                    'description' => 'Create draft schedules, edit slabs, clone, and activate fee schedules.',
                 ],
             ],
         ];

@@ -37,6 +37,12 @@ Route::middleware(['auth:admin', EnsureAdminIsActive::class, AuthenticateAdminSe
     Route::livewire('orders', 'pages::admin.orders-index')->name('orders.index')->middleware('can:orders.view');
     Route::livewire('orders/{order}', 'pages::admin.orders-show')->name('orders.show')->middleware('can:orders.view');
 
+    // Fees & Commissions
+    Route::livewire('fees', 'pages::admin.fees-index')->name('fees.index')->middleware('can:fees.view');
+    Route::livewire('fees/create', 'pages::admin.fees-edit')->name('fees.create')->middleware('can:fees.manage');
+    Route::livewire('fees/{feeSchedule}', 'pages::admin.fees-show')->name('fees.show')->middleware('can:fees.view');
+    Route::livewire('fees/{feeSchedule}/edit', 'pages::admin.fees-edit')->name('fees.edit')->middleware('can:fees.manage');
+
     // Staff & Roles Management
     Route::livewire('staff', 'pages::admin.staff')->name('staff')->middleware('can:admins.view');
     Route::livewire('roles', 'pages::admin.roles')->name('roles')->middleware('can:roles.manage');

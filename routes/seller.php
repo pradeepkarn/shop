@@ -14,6 +14,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::livewire('products', 'pages::seller.products-index')->name('products.index');
         Route::livewire('products/create', 'pages::seller.products-create')->name('products.create');
         Route::livewire('products/{product}/edit', 'pages::seller.products-edit')->name('products.edit');
+        Route::livewire('fees/calculator', 'pages::seller.fee-calculator')->name('fees.calculator');
         Route::livewire('profile', 'pages::seller.profile')->name('profile');
         Route::livewire('settings', 'pages::seller.settings')->name('settings');
     });
