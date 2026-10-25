@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Listeners;
+namespace App\Fees\Listeners;
 
 use App\Fees\Contracts\FeeCalculatorInterface;
 use App\Fees\Contracts\FeeScheduleServiceInterface;

@@ -41,3 +41,8 @@ test('App\Orders does not depend on Fees internal models or services', function 
             'App\Fees\Services\FeeScheduleService',
         ]);
 });
+
+test('no class outside App\Fees may use App\Fees\Models', function () {
+    expect('App\Fees\Models')
+        ->toOnlyBeUsedIn('App\Fees');
+});

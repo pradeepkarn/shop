@@ -5,6 +5,7 @@ namespace App\Livewire\Admin;
 use App\Catalog\Contracts\VerticalLookupInterface;
 use App\Fees\Contracts\FeeScheduleServiceInterface;
 use App\Fees\Models\FeeSchedule;
+use App\Services\AdminActivityLogger;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -31,6 +32,12 @@ new #[Layout('layouts.admin')] #[Title('Fee Schedule Details')] class extends Co
         $this->authorize('fees.manage');
 
         $clone = $service->cloneSchedule($this->schedule);
+        AdminActivityLogger::log('fee_schedule.cloned', $clone, [
+            'source_id' => $this->schedule->id,
+            'name' => $clone->name,
+            'version' => $clone->version,
+        ]);
+
         session()->flash('success', "Cloned as Draft v{$clone->version}.");
         $this->redirect(route('admin.fees.edit', $clone), navigate: true);
     }
@@ -40,6 +47,11 @@ new #[Layout('layouts.admin')] #[Title('Fee Schedule Details')] class extends Co
         $this->authorize('fees.manage');
 
         $service->activateSchedule($this->schedule);
+        AdminActivityLogger::log('fee_schedule.activated', $this->schedule, [
+            'name' => $this->schedule->name,
+            'version' => $this->schedule->version,
+        ]);
+
         session()->flash('success', "Schedule v{$this->schedule->version} is now Active.");
         unset($this->schedule);
     }

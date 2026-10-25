@@ -1,5 +1,6 @@
 <?php
 
+use App\Fees\Models\FeeSchedule;
 use App\Models\Admin;
 use App\Models\Brand;
 use App\Models\Category;
@@ -8,6 +9,7 @@ use App\Models\SellerProfile;
 use App\Models\User;
 use App\Models\Vertical;
 use App\Models\VerticalAttribute;
+use App\Shared\Enums\FeeScheduleStatus;
 use App\Support\AdminPermissions;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
@@ -327,5 +329,67 @@ test('view-only staff cannot invoke staff mutation actions', function () {
         ->test('pages::admin.staff')
         ->set('resetAdminId', $target->id)
         ->call('confirmResetPassword')
+        ->assertForbidden();
+});
+
+test('view-only staff cannot invoke fee schedule mutation actions', function () {
+    $staff = Admin::factory()->create();
+    $role = Role::findOrCreate('Fee Viewer', 'admin');
+    $role->syncPermissions([AdminPermissions::FEES_VIEW]);
+    $staff->assignRole($role);
+
+    $schedule = FeeSchedule::create([
+        'name' => 'Active Test Sched',
+        'version' => 1,
+        'status' => FeeScheduleStatus::Active,
+        'effective_from' => now()->subDay(),
+        'gst_rate' => 18.00,
+        'tcs_rate' => 0.50,
+        'tds_standard_rate' => 0.10,
+        'tds_no_pan_rate' => 5.00,
+        'default_weight_grams' => 500,
+    ]);
+
+    $draft = FeeSchedule::create([
+        'name' => 'Draft Sched',
+        'version' => 2,
+        'status' => FeeScheduleStatus::Draft,
+        'gst_rate' => 18.00,
+        'tcs_rate' => 0.50,
+        'tds_standard_rate' => 0.10,
+        'tds_no_pan_rate' => 5.00,
+        'default_weight_grams' => 500,
+    ]);
+
+    // pages::admin.fees-index actions require fees.manage
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.fees-index')
+        ->call('cloneSchedule', $schedule->id)
+        ->assertForbidden();
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.fees-index')
+        ->call('confirmActivate', $draft->id)
+        ->assertForbidden();
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.fees-index')
+        ->call('activate')
+        ->assertForbidden();
+
+    // pages::admin.fees-show actions require fees.manage
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.fees-show', ['feeSchedule' => $schedule])
+        ->call('cloneSchedule')
+        ->assertForbidden();
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.fees-show', ['feeSchedule' => $schedule])
+        ->call('activateSchedule')
+        ->assertForbidden();
+
+    // pages::admin.fees-edit requires fees.manage to mount or save
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.fees-edit', ['feeSchedule' => $draft])
         ->assertForbidden();
 });

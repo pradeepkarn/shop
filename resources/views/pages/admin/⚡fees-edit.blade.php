@@ -9,6 +9,7 @@ use App\Fees\Models\FeeCollectionRule;
 use App\Fees\Models\FeeCommissionSlab;
 use App\Fees\Models\FeeSchedule;
 use App\Fees\Models\FeeShippingSlab;
+use App\Services\AdminActivityLogger;
 use App\Shared\Enums\FeeScheduleStatus;
 use App\Shared\Enums\ShippingZone;
 use Illuminate\Support\Facades\DB;
@@ -234,8 +235,11 @@ new #[Layout('layouts.admin')] #[Title('Edit Draft Fee Schedule')] class extends
             return;
         }
 
+        $isNew = ! $this->scheduleId;
+        $savedSchedule = null;
+
         // Persist
-        DB::transaction(function () use ($service) {
+        DB::transaction(function () use ($service, $isNew, &$savedSchedule) {
             $scheduleData = [
                 'name' => $this->name,
                 'gst_rate' => (float) $this->gst_rate,
@@ -259,6 +263,8 @@ new #[Layout('layouts.admin')] #[Title('Edit Draft Fee Schedule')] class extends
                 $schedule = $service->createDraft($scheduleData);
                 $this->scheduleId = $schedule->id;
             }
+
+            $savedSchedule = $schedule;
 
             // Insert Commission Slabs
             foreach ($this->commissionSlabs as $c) {
@@ -316,6 +322,14 @@ new #[Layout('layouts.admin')] #[Title('Edit Draft Fee Schedule')] class extends
                 ]);
             }
         });
+
+        if ($savedSchedule) {
+            AdminActivityLogger::log(
+                $isNew ? 'fee_schedule.created' : 'fee_schedule.updated',
+                $savedSchedule,
+                ['name' => $savedSchedule->name, 'version' => $savedSchedule->version]
+            );
+        }
 
         session()->flash('success', "Draft fee schedule '{$this->name}' saved successfully.");
         $this->redirect(route('admin.fees.show', $this->scheduleId), navigate: true);

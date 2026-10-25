@@ -4,6 +4,7 @@ namespace App\Livewire\Admin;
 
 use App\Fees\Contracts\FeeScheduleServiceInterface;
 use App\Fees\Models\FeeSchedule;
+use App\Services\AdminActivityLogger;
 use App\Shared\Enums\FeeScheduleStatus;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -20,6 +21,11 @@ new #[Layout('layouts.admin')] #[Title('Fee Schedules')] class extends Component
 
         $schedule = FeeSchedule::findOrFail($scheduleId);
         $clone = $service->cloneSchedule($schedule);
+        AdminActivityLogger::log('fee_schedule.cloned', $clone, [
+            'source_id' => $schedule->id,
+            'name' => $clone->name,
+            'version' => $clone->version,
+        ]);
 
         session()->flash('success', "Fee schedule '{$schedule->name}' cloned as Draft v{$clone->version}.");
         $this->redirect(route('admin.fees.edit', $clone), navigate: true);
@@ -43,6 +49,10 @@ new #[Layout('layouts.admin')] #[Title('Fee Schedules')] class extends Component
 
         $schedule = FeeSchedule::findOrFail($this->activatingScheduleId);
         $service->activateSchedule($schedule);
+        AdminActivityLogger::log('fee_schedule.activated', $schedule, [
+            'name' => $schedule->name,
+            'version' => $schedule->version,
+        ]);
 
         $this->showActivateModal = false;
         $this->activatingScheduleId = null;

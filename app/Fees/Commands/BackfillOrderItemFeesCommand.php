@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Console\Commands;
+namespace App\Fees\Commands;
 
 use App\Fees\Contracts\FeeCalculatorInterface;
 use App\Fees\Contracts\FeeScheduleServiceInterface;
@@ -48,39 +48,41 @@ class BackfillOrderItemFeesCommand extends Command
         $existingItemIds = OrderItemFeeSnapshot::pluck('order_item_id')->all();
         $this->line('Found '.count($existingItemIds).' items with existing fee snapshots.');
 
-        $items = $lookup->getUnprocessedOrderItemsForBackfill($existingItemIds, $limit);
+        // Get missing order items from Orders module via contract
+        $missingItems = $lookup->getUnprocessedOrderItemsForBackfill($existingItemIds, $limit);
 
-        if (empty($items)) {
-            $this->info('No unprocessed order items found. Everything is up to date.');
+        if (empty($missingItems)) {
+            $this->info('All order items have fee snapshots. Nothing to backfill.');
 
-            return Command::SUCCESS;
+            return self::SUCCESS;
         }
 
-        $this->info('Found '.count($items).' order item(s) to process.');
+        $this->info('Found '.count($missingItems).' order items needing fee snapshots.');
 
+        // Group by seller order ID
         /** @var array<string, array<int, OrderItemFeeContextDto>> $grouped */
         $grouped = [];
-        foreach ($items as $item) {
+        foreach ($missingItems as $item) {
             $grouped[$item->sellerOrderId][] = $item;
         }
 
-        $processedCount = 0;
+        $successCount = 0;
         $skippedCount = 0;
 
-        foreach ($grouped as $sellerOrderId => $sellerItems) {
-            $first = $sellerItems[0];
-            $schedule = $scheduleService->getScheduleForDate($first->placedAt);
+        foreach ($grouped as $sellerOrderId => $items) {
+            $firstItem = $items[0];
+            $schedule = $scheduleService->getScheduleForDate($firstItem->placedAt);
 
             if (! $schedule) {
-                $placedStr = $first->placedAt->format('Y-m-d H:i:s');
-                $this->warn("Skipped seller order {$sellerOrderId} (placed at {$placedStr}): No covering fee schedule found.");
-                $skippedCount += count($sellerItems);
+                $this->warn("No fee schedule covering {$firstItem->placedAt->format('Y-m-d H:i:s')} for seller order {$sellerOrderId}. Skipping ".count($items).' items.');
+                $skippedCount += count($items);
 
                 continue;
             }
 
+            // Build Quote Inputs
             $quoteInputs = [];
-            foreach ($sellerItems as $item) {
+            foreach ($items as $item) {
                 $quoteInputs[] = new FeeQuoteInput(
                     pricePaise: $item->unitPricePaise,
                     productGstRate: $item->gstRate,
@@ -99,13 +101,13 @@ class BackfillOrderItemFeesCommand extends Command
 
             $breakdowns = $calculator->calculateForSellerPackage(
                 items: $quoteInputs,
-                pickupState: (string) $first->sellerPickupState,
-                pickupPincode: $first->sellerPickupPincode,
-                deliveryState: $first->deliveryState,
-                deliveryPincode: $first->deliveryPincode,
-                paymentMethod: $first->paymentMethod,
-                sellerHasPan: $first->sellerHasPan,
-                effectiveDate: $first->placedAt,
+                pickupState: (string) $firstItem->sellerPickupState,
+                pickupPincode: $firstItem->sellerPickupPincode,
+                deliveryState: $firstItem->deliveryState,
+                deliveryPincode: $firstItem->deliveryPincode,
+                paymentMethod: $firstItem->paymentMethod,
+                sellerHasPan: $firstItem->sellerHasPan,
+                effectiveDate: $firstItem->placedAt,
             );
 
             if (! $dryRun) {
@@ -113,8 +115,8 @@ class BackfillOrderItemFeesCommand extends Command
                 $sellerNetPayout = 0;
                 $sellerCredits = 0;
 
-                DB::transaction(function () use ($sellerItems, $breakdowns, $first, $sellerOrderId, &$sellerDeductions, &$sellerNetPayout, &$sellerCredits) {
-                    foreach ($sellerItems as $idx => $contextItem) {
+                DB::transaction(function () use ($items, $breakdowns, $firstItem, $sellerOrderId, &$sellerDeductions, &$sellerNetPayout, &$sellerCredits) {
+                    foreach ($items as $idx => $contextItem) {
                         $breakdown = $breakdowns[$idx];
 
                         $sellerDeductions += $breakdown->totalDeductions->getPaise();
@@ -142,14 +144,14 @@ class BackfillOrderItemFeesCommand extends Command
                                 'net_payout' => $breakdown->netPayout->getPaise(),
                                 'claimable_credits' => $breakdown->claimableCredits->getPaise(),
                                 'snapshot_data' => array_merge($breakdown->toArray(), [
-                                    'seller_profile_id' => $first->sellerProfileId,
+                                    'seller_profile_id' => $firstItem->sellerProfileId,
                                 ]),
                             ]
                         );
                     }
                 });
 
-                event(new FeesCalculated($first->orderId, [
+                event(new FeesCalculated($firstItem->orderId, [
                     $sellerOrderId => [
                         'total_deductions_paise' => $sellerDeductions,
                         'net_payout_paise' => $sellerNetPayout,
@@ -158,11 +160,11 @@ class BackfillOrderItemFeesCommand extends Command
                 ]));
             }
 
-            $processedCount += count($sellerItems);
+            $successCount += count($items);
         }
 
-        $this->info("Backfill complete. Processed: {$processedCount}, Skipped: {$skippedCount}.");
+        $this->info("Backfill complete. Processed: {$successCount}, Skipped: {$skippedCount}.");
 
-        return Command::SUCCESS;
+        return self::SUCCESS;
     }
 }

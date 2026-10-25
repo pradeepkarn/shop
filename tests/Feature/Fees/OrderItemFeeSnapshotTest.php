@@ -1,11 +1,11 @@
 <?php
 
+use App\Fees\Listeners\CalculateOrderItemFeesOnOrderPlaced;
 use App\Fees\Models\FeeClosingSlab;
 use App\Fees\Models\FeeCommissionSlab;
 use App\Fees\Models\FeeSchedule;
 use App\Fees\Models\FeeShippingSlab;
 use App\Fees\Models\OrderItemFeeSnapshot;
-use App\Listeners\CalculateOrderItemFeesOnOrderPlaced;
 use App\Models\Brand;
 use App\Models\Category;
 use App\Models\CustomerAddress;
@@ -262,7 +262,7 @@ test('fees:backfill command is idempotent and skips orders with no covering sche
     // 1. Backfill with NO fee schedule: reports skipped
     FeeSchedule::query()->delete();
     $this->artisan('fees:backfill')
-        ->expectsOutputToContain('Skipped seller order')
+        ->expectsOutputToContain('Skipping')
         ->assertSuccessful();
 
     expect(OrderItemFeeSnapshot::count())->toBe(0);
@@ -291,7 +291,7 @@ test('fees:backfill command is idempotent and skips orders with no covering sche
 
     // 3. Run backfill again: idempotent
     $this->artisan('fees:backfill')
-        ->expectsOutputToContain('No unprocessed order items found. Everything is up to date.')
+        ->expectsOutputToContain('All order items have fee snapshots. Nothing to backfill.')
         ->assertSuccessful();
 
     expect(OrderItemFeeSnapshot::count())->toBe(1);

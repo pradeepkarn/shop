@@ -6,10 +6,12 @@ use App\Fees\Models\FeeCommissionSlab;
 use App\Fees\Models\FeeSchedule;
 use App\Fees\Models\FeeShippingSlab;
 use App\Models\Admin;
+use App\Models\AdminActivityLog;
 use App\Shared\Enums\FeeScheduleStatus;
 use App\Shared\Enums\ShippingZone;
 use App\Support\AdminPermissions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
 
@@ -260,4 +262,45 @@ test('effective dating applies historical schedule to past orders', function () 
     $mayOrderDate = now()->parse('2026-05-10 12:00:00');
     $resolvedMay = $service->getScheduleForDate($mayOrderDate);
     expect($resolvedMay->id)->toBe($sched2->id);
+});
+
+test('fee schedule create, edit, activate, and clone are written to the admin activity log', function () {
+    $admin = Admin::factory()->create(['is_active' => true]);
+    $admin->givePermissionTo(AdminPermissions::FEES_MANAGE);
+    $admin->givePermissionTo(AdminPermissions::FEES_VIEW);
+
+    // 1. Create Draft
+    Livewire::actingAs($admin, 'admin')
+        ->test('pages::admin.fees-edit')
+        ->set('name', 'Logged Schedule V1')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $created = FeeSchedule::where('name', 'Logged Schedule V1')->firstOrFail();
+    expect(AdminActivityLog::where('action', 'fee_schedule.created')->where('subject_id', $created->id)->exists())->toBeTrue();
+
+    // 2. Edit Draft
+    Livewire::actingAs($admin, 'admin')
+        ->test('pages::admin.fees-edit', ['feeSchedule' => $created->id])
+        ->set('name', 'Logged Schedule V1 Updated')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect(AdminActivityLog::where('action', 'fee_schedule.updated')->where('subject_id', $created->id)->exists())->toBeTrue();
+
+    // 3. Clone Schedule
+    Livewire::actingAs($admin, 'admin')
+        ->test('pages::admin.fees-index')
+        ->call('cloneSchedule', $created->id);
+
+    $cloned = FeeSchedule::where('name', 'Logged Schedule V1 Updated')->where('version', 2)->firstOrFail();
+    expect(AdminActivityLog::where('action', 'fee_schedule.cloned')->where('subject_id', $cloned->id)->exists())->toBeTrue();
+
+    // 4. Activate Schedule
+    Livewire::actingAs($admin, 'admin')
+        ->test('pages::admin.fees-index')
+        ->call('confirmActivate', $cloned->id)
+        ->call('activate');
+
+    expect(AdminActivityLog::where('action', 'fee_schedule.activated')->where('subject_id', $cloned->id)->exists())->toBeTrue();
 });

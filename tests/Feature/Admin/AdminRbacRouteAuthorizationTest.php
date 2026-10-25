@@ -1,5 +1,6 @@
 <?php
 
+use App\Fees\Models\FeeSchedule;
 use App\Models\Admin;
 use App\Models\Category;
 use App\Models\SellerDocument;
@@ -10,6 +11,7 @@ use App\Orders\Enums\OrderStatus;
 use App\Orders\Enums\PaymentMethod;
 use App\Orders\Enums\PaymentStatus;
 use App\Orders\Models\Order;
+use App\Shared\Enums\FeeScheduleStatus;
 use App\Support\AdminPermissions;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -84,6 +86,35 @@ function getRouteParam(string $routeName): array
                 ]);
             })(),
         ],
+        'admin.fees.show' => [
+            'feeSchedule' => (function () {
+                return FeeSchedule::create([
+                    'name' => 'Route Param Sched',
+                    'version' => 1,
+                    'status' => FeeScheduleStatus::Active,
+                    'effective_from' => now()->subDay(),
+                    'gst_rate' => 18.00,
+                    'tcs_rate' => 0.50,
+                    'tds_standard_rate' => 0.10,
+                    'tds_no_pan_rate' => 5.00,
+                    'default_weight_grams' => 500,
+                ]);
+            })(),
+        ],
+        'admin.fees.edit' => [
+            'feeSchedule' => (function () {
+                return FeeSchedule::create([
+                    'name' => 'Draft Route Param Sched',
+                    'version' => 1,
+                    'status' => FeeScheduleStatus::Draft,
+                    'gst_rate' => 18.00,
+                    'tcs_rate' => 0.50,
+                    'tds_standard_rate' => 0.10,
+                    'tds_no_pan_rate' => 5.00,
+                    'default_weight_grams' => 500,
+                ]);
+            })(),
+        ],
         default => [],
     };
 }
@@ -101,6 +132,10 @@ dataset('admin_protected_routes', [
     ['admin.catalog.products', AdminPermissions::CATALOG_PRODUCTS_VIEW],
     ['admin.orders.index', AdminPermissions::ORDERS_VIEW],
     ['admin.orders.show', AdminPermissions::ORDERS_VIEW],
+    ['admin.fees.index', AdminPermissions::FEES_VIEW],
+    ['admin.fees.show', AdminPermissions::FEES_VIEW],
+    ['admin.fees.create', AdminPermissions::FEES_MANAGE],
+    ['admin.fees.edit', AdminPermissions::FEES_MANAGE],
     ['admin.staff', AdminPermissions::ADMINS_VIEW],
     ['admin.roles', AdminPermissions::ROLES_MANAGE],
     ['admin.activity-logs', AdminPermissions::AUDIT_VIEW],

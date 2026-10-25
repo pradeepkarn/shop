@@ -59,12 +59,7 @@ class OrderItemsFeeLookupService implements OrderItemsFeeLookupInterface
         $dtos = [];
 
         foreach ($items as $item) {
-            $sellerOrder = $item->sellerOrder;
-            if (! $sellerOrder || ! $sellerOrder->order) {
-                continue;
-            }
-
-            $dtos[] = $this->buildDto($item, $sellerOrder, $sellerOrder->order);
+            $dtos[] = $this->buildDto($item, $item->sellerOrder, $item->sellerOrder->order);
         }
 
         return $dtos;
@@ -75,11 +70,11 @@ class OrderItemsFeeLookupService implements OrderItemsFeeLookupInterface
         $sellerProfile = $sellerOrder->sellerProfile;
 
         // Resolve vertical
-        $verticalId = $item->variant?->product?->vertical_id
-            ?? $item->listing?->variant?->product?->vertical_id;
+        $verticalId = $item->variant?->product->vertical_id
+            ?? $item->listing?->variant?->product->vertical_id;
 
         // Resolve weight in kg
-        $weightKg = $item->variant?->weight
+        $weightKg = $item->variant->weight
             ?? $item->listing?->variant?->weight;
 
         // Resolve pickup state & pincode
@@ -92,7 +87,7 @@ class OrderItemsFeeLookupService implements OrderItemsFeeLookupInterface
             ?: ($order->delivery_address['state'] ?? null);
         $deliveryPincode = $order->delivery_address['pincode'] ?? null;
 
-        $sellerHasPan = ! empty($sellerProfile?->pan);
+        $sellerHasPan = $sellerProfile !== null && ! empty($sellerProfile->pan);
         $paymentMethod = $order->payment_method->value;
         $placedAt = $order->placed_at ?? $sellerOrder->placed_at ?? $order->created_at ?? now();
 
