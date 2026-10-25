@@ -428,4 +428,3 @@ test('seller with only delivered orders deletes account: profile anonymized, lis
         ->assertDontSee('Deleted Seller')
         ->assertSee('—');
 });
-

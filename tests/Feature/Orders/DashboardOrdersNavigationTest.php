@@ -153,4 +153,3 @@ test('seller dashboard sidebar contains Orders link with placed orders count bad
     // Badge span is not rendered when count is 0
     $response2->assertDontSee('bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white');
 });
-

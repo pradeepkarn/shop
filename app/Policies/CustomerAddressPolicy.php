@@ -31,4 +31,3 @@ class CustomerAddressPolicy
         return (int) $user->id === (int) $address->user_id;
     }
 }
-
