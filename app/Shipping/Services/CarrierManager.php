@@ -7,6 +7,7 @@ use App\Shipping\Contracts\ShippingCarrierInterface;
 use App\Shipping\Drivers\EkartCarrierDriver;
 use App\Shipping\Drivers\FakeCarrierDriver;
 use App\Shipping\Drivers\ManualCarrierDriver;
+use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use DomainException;
 use Illuminate\Contracts\Foundation\Application;
 
@@ -31,6 +32,7 @@ class CarrierManager implements CarrierManagerInterface
 
         $instance = match ($driverName) {
             'ekart' => new EkartCarrierDriver(config('shipping.ekart', [])),
+            'shiprocket' => new ShiprocketCarrierDriver(config('shipping.shiprocket', [])),
             'manual' => new ManualCarrierDriver,
             'fake' => new FakeCarrierDriver,
             default => throw new DomainException("Unsupported shipping carrier driver: [{$driverName}]"),

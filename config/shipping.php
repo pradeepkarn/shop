@@ -6,7 +6,7 @@ return [
     | Default Shipping Carrier Driver
     |--------------------------------------------------------------------------
     |
-    | Supported: 'ekart', 'manual', 'fake'
+    | Supported: 'ekart', 'shiprocket', 'manual', 'fake'
     |
     */
 
@@ -50,6 +50,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | SSL Verification & CA Certificate Bundle
+    |--------------------------------------------------------------------------
+    |
+    | Used for cURL/OpenSSL peer certificate verification on Windows or custom setups.
+    | Set SHIPPING_SSL_VERIFY=false in .env to disable SSL verification in local development.
+    |
+    */
+
+    'ssl_verify' => env('SHIPPING_SSL_VERIFY', true),
+    'ca_bundle_path' => env('SHIPPING_CA_BUNDLE_PATH', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | Volumetric Divisor
     |--------------------------------------------------------------------------
     |
@@ -79,5 +92,25 @@ return [
         'webhook_algorithm' => env('EKART_WEBHOOK_ALGO', null),
         'timeout_seconds' => (int) env('EKART_TIMEOUT_SECONDS', 15),
         'retry_attempts' => (int) env('EKART_RETRY_ATTEMPTS', 3),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Shiprocket Carrier Settings
+    |--------------------------------------------------------------------------
+    |
+    | Credentials, courier selection, and configuration for Shiprocket API.
+    |
+    */
+
+    'shiprocket' => [
+        'base_url' => env('SHIPROCKET_BASE_URL', 'https://apiv2.shiprocket.in/v1/external'),
+        'email' => env('SHIPROCKET_EMAIL', ''),
+        'password' => env('SHIPROCKET_PASSWORD', ''),
+        'webhook_token' => env('SHIPROCKET_WEBHOOK_TOKEN', ''),
+        'courier_selection_rule' => env('SHIPROCKET_COURIER_SELECTION', 'recommended'), // 'recommended', 'cheapest', 'fastest', 'specific'
+        'specific_courier_id' => env('SHIPROCKET_SPECIFIC_COURIER_ID', null),
+        'timeout_seconds' => (int) env('SHIPROCKET_TIMEOUT_SECONDS', 15),
+        'retry_attempts' => (int) env('SHIPROCKET_RETRY_ATTEMPTS', 3),
     ],
 ];

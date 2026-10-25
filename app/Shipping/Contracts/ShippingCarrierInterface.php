@@ -10,6 +10,7 @@ use App\Shipping\DTOs\CreateShipmentResponseDto;
 use App\Shipping\DTOs\SellerWarehouseRegistrationDto;
 use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
+use App\Shipping\Models\Shipment;
 
 interface ShippingCarrierInterface
 {

@@ -7,6 +7,7 @@ use App\Orders\Contracts\SellerOrderShippingDetailsLookupInterface;
 use App\Sellers\Contracts\SellerPickupAddressLookupInterface;
 use App\Shipping\Contracts\CarrierManagerInterface;
 use App\Shipping\Contracts\ShipmentServiceInterface;
+use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use App\Shipping\DTOs\CreateShipmentRequestDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
@@ -42,7 +43,7 @@ class ShipmentService implements ShipmentServiceInterface
             ->where('status', '!=', ShipmentStatus::Cancelled->value)
             ->first();
 
-        if ($existing) {
+        if ($existing && $existing->creation_step === 'label_ready') {
             return $existing;
         }
 
@@ -74,7 +75,35 @@ class ShipmentService implements ShipmentServiceInterface
             pickupLocationAlias: 'WH-'.$details->sellerProfileId,
         );
 
-        $response = $driver->createShipment($requestDto, $details, $invoice);
+        $previousAttempts = Shipment::where('seller_order_id', $sellerOrderId)->count();
+        $attempt = $existing ? ($existing->fulfillment_attempt ?: 1) : ($previousAttempts + 1);
+
+        $targetShipment = $existing;
+        if (! $targetShipment) {
+            /** @var Shipment $targetShipment */
+            $targetShipment = Shipment::create([
+                'seller_order_id' => $details->sellerOrderId,
+                'order_id' => $details->orderId,
+                'seller_profile_id' => $details->sellerProfileId,
+                'provider' => $driver->name(),
+                'fulfillment_attempt' => $attempt,
+                'creation_step' => 'pending',
+                'status' => ShipmentStatus::Created,
+                'actual_weight_grams' => $actualWeightGrams,
+                'volumetric_weight_grams' => $volumetricWeightGrams,
+                'chargeable_weight_grams' => $chargeableWeightGrams,
+                'length_cm' => $lengthCm,
+                'width_cm' => $widthCm,
+                'height_cm' => $heightCm,
+                'is_cod' => $details->isCod,
+                'cod_amount_paise' => $details->codAmountPaise,
+                'pickup_date' => $pickupDate,
+            ]);
+        }
+
+        $response = $driver instanceof ShiprocketCarrierDriver
+            ? $driver->createShipment($requestDto, $details, $invoice, $targetShipment)
+            : $driver->createShipment($requestDto, $details, $invoice);
         if (! $response->success || empty($response->awb)) {
             throw new DomainException('Carrier shipment manifestation failed: '.($response->errorMessage ?? 'Unknown error'));
         }
@@ -83,22 +112,29 @@ class ShipmentService implements ShipmentServiceInterface
             $details,
             $driver,
             $response,
+            $targetShipment,
             $actualWeightGrams,
             $volumetricWeightGrams,
             $chargeableWeightGrams,
             $lengthCm,
             $widthCm,
             $heightCm,
-            $pickupDate
+            $pickupDate,
+            $attempt
         ) {
-            /** @var Shipment $shipment */
-            $shipment = Shipment::create([
-                'seller_order_id' => $details->sellerOrderId,
-                'order_id' => $details->orderId,
-                'seller_profile_id' => $details->sellerProfileId,
-                'provider' => $driver->name(),
+            $rawMeta = $response->rawResponse ?? [];
+            $courierName = $rawMeta['courier_name'] ?? null;
+            $provOrderId = isset($rawMeta['shiprocket_order_id']) ? (string) $rawMeta['shiprocket_order_id'] : null;
+            $provShipmentId = isset($rawMeta['shiprocket_shipment_id']) ? (string) $rawMeta['shiprocket_shipment_id'] : null;
+
+            $targetShipment->update([
+                'courier_name' => $courierName,
                 'awb' => $response->awb,
                 'vendor_wbn' => $response->vendorWbn,
+                'provider_order_id' => $provOrderId,
+                'provider_shipment_id' => $provShipmentId,
+                'fulfillment_attempt' => $attempt,
+                'creation_step' => 'label_ready',
                 'public_tracking_url' => $response->publicTrackingUrl,
                 'status' => ShipmentStatus::Created,
                 'actual_weight_grams' => $actualWeightGrams,
@@ -114,33 +150,38 @@ class ShipmentService implements ShipmentServiceInterface
                 'raw_metadata' => $response->rawResponse,
             ]);
 
-            // Attempt to fetch label PDF
-            try {
-                $labelBinary = $driver->downloadLabel($shipment->awb);
-                $labelPath = "shipping_labels/{$shipment->id}.pdf";
-                Storage::disk('local')->put($labelPath, $labelBinary);
-                $shipment->update([
-                    'label_path' => $labelPath,
-                    'label_generated_at' => now(),
-                ]);
-            } catch (\Throwable $e) {
-                Log::warning('Initial label download deferred', [
-                    'shipment_id' => $shipment->id,
-                    'error' => $e->getMessage(),
-                ]);
+            // Attempt to fetch label PDF if not already saved
+            if (! $targetShipment->label_path || ! Storage::disk('local')->exists($targetShipment->label_path)) {
+                try {
+                    $labelBinary = $driver->downloadLabel($targetShipment->awb);
+                    $labelPath = "shipping_labels/{$targetShipment->id}.pdf";
+                    Storage::disk('local')->put($labelPath, $labelBinary);
+                    $targetShipment->update([
+                        'label_path' => $labelPath,
+                        'label_generated_at' => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::warning('Initial label download deferred', [
+                        'shipment_id' => $targetShipment->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
-            // Create initial event
-            ShipmentEvent::create([
-                'shipment_id' => $shipment->id,
-                'event_key' => "{$shipment->id}:created:".time(),
-                'provider' => $driver->name(),
-                'status' => ShipmentStatus::Created,
-                'provider_status' => 'Created',
-                'description' => 'Shipment package created with carrier',
-                'occurred_at' => now(),
-                'received_at' => now(),
-            ]);
+            // Create initial event if not created
+            $eventKey = "{$targetShipment->id}:created:".time();
+            if (! ShipmentEvent::where('shipment_id', $targetShipment->id)->where('status', ShipmentStatus::Created)->exists()) {
+                ShipmentEvent::create([
+                    'shipment_id' => $targetShipment->id,
+                    'event_key' => $eventKey,
+                    'provider' => $driver->name(),
+                    'status' => ShipmentStatus::Created,
+                    'provider_status' => 'Created',
+                    'description' => 'Shipment package created with carrier',
+                    'occurred_at' => now(),
+                    'received_at' => now(),
+                ]);
+            }
 
             // Mark seller order as Shipped in Orders module
             $this->orderFulfillment->markShipped(
@@ -149,7 +190,7 @@ class ShipmentService implements ShipmentServiceInterface
                 trackingNumber: $response->awb,
             );
 
-            return $shipment;
+            return $targetShipment;
         });
     }
 
@@ -308,6 +349,10 @@ class ShipmentService implements ShipmentServiceInterface
             ->where('provider', $provider)
             ->first();
 
+        if ($profile && $profile->registration_status === 'pending_verification') {
+            throw new DomainException("Pickup address for seller ID {$sellerProfileId} is pending phone/OTP verification with Shiprocket. Ready to ship is blocked.");
+        }
+
         if ($profile && $profile->is_registered && $profile->registration_status === 'registered') {
             return;
         }
@@ -322,18 +367,25 @@ class ShipmentService implements ShipmentServiceInterface
 
         $alias = $res->alias ?: ('WH-'.$sellerProfileId);
         $pincode = (int) preg_replace('/\D/', '', $address->postalCode);
+        $statusText = $res->rawResponse['status_text'] ?? ($res->success ? 'registered' : 'failed');
+        $phoneVerified = (bool) ($res->rawResponse['phone_verified'] ?? ($res->success && $statusText === 'registered'));
 
         SellerShippingProfile::updateOrCreate(
             ['seller_profile_id' => $sellerProfileId, 'provider' => $provider],
             [
                 'warehouse_alias' => $alias,
                 'is_registered' => $res->success,
-                'registration_status' => $res->success ? 'registered' : 'failed',
+                'registration_status' => $statusText,
+                'phone_verified' => $phoneVerified,
                 'last_registered_at' => now(),
                 'error_message' => $res->success ? null : $res->message,
                 'pincode' => $pincode,
             ]
         );
+
+        if ($statusText === 'pending_verification') {
+            throw new DomainException("Pickup address for seller ID {$sellerProfileId} is pending phone/OTP verification with Shiprocket. Ready to ship is blocked.");
+        }
 
         if (! $res->success) {
             throw new DomainException("Pickup address for seller '{$address->storeName}' is not registered with carrier: ".($res->message ?? 'Registration pending'));

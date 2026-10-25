@@ -72,7 +72,7 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         return Cache::remember($cacheKey, now()->addHours(20), function () {
             $url = "{$this->baseUrl}/integrations/v2/auth/token/{$this->clientId}";
 
-            $response = Http::timeout($this->timeoutSeconds)
+            $response = $this->baseRequest()
                 ->retry($this->retryAttempts, 200, throw: false)
                 ->post($url, [
                     'username' => $this->username,
@@ -98,14 +98,50 @@ class EkartCarrierDriver implements ShippingCarrierInterface
     }
 
     /**
+     * Build base pending request with timeout, JSON headers, and SSL options.
+     */
+    protected function baseRequest(): PendingRequest
+    {
+        $request = Http::timeout($this->timeoutSeconds)->acceptJson();
+
+        $verify = config('shipping.ssl_verify', true);
+        $caPath = config('shipping.ca_bundle_path');
+
+        if (! empty($caPath) && file_exists($caPath)) {
+            $request = $request->withOptions(['verify' => $caPath]);
+        } elseif ($verify === false || $verify === 'false' || $verify === 0 || $verify === '0') {
+            $request = $request->withOptions(['verify' => false]);
+        } elseif (PHP_OS_FAMILY === 'Windows') {
+            $curlCa = (string) ini_get('curl.cainfo');
+            $sslCa = (string) ini_get('openssl.cafile');
+
+            if ((empty($curlCa) || ! file_exists($curlCa)) && (empty($sslCa) || ! file_exists($sslCa))) {
+                $candidates = [
+                    'D:/xampp/php/extras/ssl/cacert.pem',
+                    'D:/xampp/apache/bin/curl-ca-bundle.crt',
+                    'C:/xampp/php/extras/ssl/cacert.pem',
+                    'C:/xampp/apache/bin/curl-ca-bundle.crt',
+                ];
+                foreach ($candidates as $candidate) {
+                    if (file_exists($candidate)) {
+                        $request = $request->withOptions(['verify' => $candidate]);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return $request;
+    }
+
+    /**
      * Authenticated HTTP client with bearer token and base URL.
      */
     protected function client(): PendingRequest
     {
-        return Http::baseUrl($this->baseUrl)
-            ->timeout($this->timeoutSeconds)
-            ->withToken($this->getAccessToken())
-            ->acceptJson();
+        return $this->baseRequest()
+            ->baseUrl($this->baseUrl)
+            ->withToken($this->getAccessToken());
     }
 
     public function checkServiceability(string $pincode, ?string $pickupPincode = null): ServiceabilityResultDto

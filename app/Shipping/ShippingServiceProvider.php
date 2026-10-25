@@ -38,11 +38,9 @@ class ShippingServiceProvider extends ServiceProvider
     {
         $this->loadRoutesFrom(__DIR__.'/routes/shipping.php');
 
-        if ($this->app->runningInConsole()) {
-            $this->commands([
-                PollShipmentTrackingCommand::class,
-                RegisterSellerWarehousesCommand::class,
-            ]);
-        }
+        $this->commands([
+            PollShipmentTrackingCommand::class,
+            RegisterSellerWarehousesCommand::class,
+        ]);
     }
 }

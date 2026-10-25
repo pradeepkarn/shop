@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $provider
  * @property string $warehouse_alias
  * @property bool $is_registered
+ * @property bool $phone_verified
  * @property string $registration_status
  * @property Carbon|null $last_registered_at
  * @property string|null $error_message
@@ -28,6 +29,7 @@ class SellerShippingProfile extends Model
         'provider',
         'warehouse_alias',
         'is_registered',
+        'phone_verified',
         'registration_status',
         'last_registered_at',
         'error_message',
@@ -43,6 +45,7 @@ class SellerShippingProfile extends Model
         return [
             'seller_profile_id' => 'integer',
             'is_registered' => 'boolean',
+            'phone_verified' => 'boolean',
             'pincode' => 'integer',
             'last_registered_at' => 'datetime',
         ];

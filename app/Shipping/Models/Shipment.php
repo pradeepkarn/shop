@@ -15,8 +15,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $order_id
  * @property int $seller_profile_id
  * @property string $provider
+ * @property string|null $courier_name
  * @property string|null $awb
  * @property string|null $vendor_wbn
+ * @property string|null $provider_order_id
+ * @property string|null $provider_shipment_id
+ * @property int $fulfillment_attempt
+ * @property string $creation_step
  * @property string|null $public_tracking_url
  * @property ShipmentStatus $status
  * @property int $actual_weight_grams
@@ -28,6 +33,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property bool $is_cod
  * @property int $cod_amount_paise
  * @property string|null $label_path
+ * @property string|null $manifest_path
  * @property Carbon|null $label_generated_at
  * @property Carbon|null $pickup_date
  * @property Carbon|null $picked_up_at
@@ -55,8 +61,13 @@ class Shipment extends Model
         'order_id',
         'seller_profile_id',
         'provider',
+        'courier_name',
         'awb',
         'vendor_wbn',
+        'provider_order_id',
+        'provider_shipment_id',
+        'fulfillment_attempt',
+        'creation_step',
         'public_tracking_url',
         'status',
         'actual_weight_grams',
@@ -68,6 +79,7 @@ class Shipment extends Model
         'is_cod',
         'cod_amount_paise',
         'label_path',
+        'manifest_path',
         'label_generated_at',
         'pickup_date',
         'picked_up_at',
@@ -88,6 +100,7 @@ class Shipment extends Model
     {
         return [
             'seller_profile_id' => 'integer',
+            'fulfillment_attempt' => 'integer',
             'status' => ShipmentStatus::class,
             'actual_weight_grams' => 'integer',
             'volumetric_weight_grams' => 'integer',

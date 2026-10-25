@@ -55,6 +55,9 @@ class RegisterSellerWarehousesCommand extends Command
                 $alias = $res->alias ?: ('WH-'.$address->sellerProfileId);
                 $pincode = (int) preg_replace('/\D/', '', $address->postalCode);
 
+                $statusText = $res->rawResponse['status_text'] ?? ($res->success ? 'registered' : 'failed');
+                $phoneVerified = (bool) ($res->rawResponse['phone_verified'] ?? ($res->success && $statusText === 'registered'));
+
                 SellerShippingProfile::updateOrCreate(
                     [
                         'seller_profile_id' => $address->sellerProfileId,
@@ -63,7 +66,8 @@ class RegisterSellerWarehousesCommand extends Command
                     [
                         'warehouse_alias' => $alias,
                         'is_registered' => $res->success,
-                        'registration_status' => $res->success ? 'registered' : 'failed',
+                        'registration_status' => $statusText,
+                        'phone_verified' => $phoneVerified,
                         'last_registered_at' => now(),
                         'error_message' => $res->success ? null : $res->message,
                         'pincode' => $pincode,

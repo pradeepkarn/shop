@@ -5,6 +5,7 @@ namespace App\Livewire\Admin;
 use App\Shipping\Contracts\CarrierManagerInterface;
 use App\Shipping\Contracts\ShippingCarrierInterface;
 use App\Shipping\Drivers\EkartCarrierDriver;
+use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use App\Shipping\Models\SellerShippingProfile;
 use Illuminate\Support\Facades\Artisan;
 use Livewire\Attributes\Computed;
@@ -28,16 +29,18 @@ new #[Layout('layouts.admin')] #[Title('Shipping Settings')] class extends Compo
     #[Computed]
     public function warehouseStats(): array
     {
-        $total = SellerShippingProfile::count();
-        $registered = SellerShippingProfile::where('is_registered', true)->count();
-        $failed = SellerShippingProfile::where('registration_status', 'failed')->count();
-        $pending = $total - $registered - $failed;
+        $query = SellerShippingProfile::where('provider', $this->activeDriver);
+        $total = (clone $query)->count();
+        $registered = (clone $query)->where('registration_status', 'registered')->count();
+        $pending = (clone $query)->where('registration_status', 'pending_verification')->count();
+        $failed = (clone $query)->where('registration_status', 'failed')->count();
+        $otherPending = $total - $registered - $pending - $failed;
 
         return [
             'total' => $total,
             'registered' => $registered,
             'failed' => $failed,
-            'pending' => max(0, $pending),
+            'pending' => max(0, $pending + max(0, $otherPending)),
         ];
     }
 
@@ -50,6 +53,29 @@ new #[Layout('layouts.admin')] #[Title('Shipping Settings')] class extends Compo
         return ! empty($header) && ! empty($algo);
     }
 
+    #[Computed]
+    public function shiprocketWebhookConfigured(): bool
+    {
+        return ! empty(config('shipping.shiprocket.webhook_token'));
+    }
+
+    #[Computed]
+    public function shiprocketWalletBalance(): ?float
+    {
+        try {
+            /** @var CarrierManagerInterface $carrierManager */
+            $carrierManager = app(CarrierManagerInterface::class);
+            $driver = $carrierManager->driver('shiprocket');
+            if ($driver instanceof ShiprocketCarrierDriver) {
+                return $driver->getWalletBalance();
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return null;
+    }
+
     public function testConnection(CarrierManagerInterface $carrierManager): void
     {
         $this->authorize('shipping.manage');
@@ -60,7 +86,11 @@ new #[Layout('layouts.admin')] #[Title('Shipping Settings')] class extends Compo
             if ($driver instanceof EkartCarrierDriver) {
                 $token = $driver->getAccessToken();
                 $this->testConnectionSuccess = ! empty($token);
-                $this->testConnectionResult = 'Connection successful! OAuth token verified and cached.';
+                $this->testConnectionResult = 'Connection successful! Ekart OAuth token verified and cached.';
+            } elseif ($driver instanceof ShiprocketCarrierDriver) {
+                $token = $driver->getAccessToken();
+                $this->testConnectionSuccess = ! empty($token);
+                $this->testConnectionResult = 'Connection successful! Shiprocket token verified and cached.';
             } else {
                 $this->testConnectionSuccess = true;
                 $this->testConnectionResult = "Driver [{$this->activeDriver}] is active and operational.";
@@ -120,11 +150,26 @@ new #[Layout('layouts.admin')] #[Title('Shipping Settings')] class extends Compo
                 <label class="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1">Carrier Provider</label>
                 <div class="flex items-center gap-3">
                     <span class="inline-flex items-center rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-extrabold text-indigo-700 ring-1 ring-inset ring-indigo-700/20 dark:bg-indigo-950/50 dark:text-indigo-300">
-                        {{ strtoupper($activeDriver) }} (Ekart Logistics)
+                        {{ strtoupper($activeDriver) }} ({{ $activeDriver === 'shiprocket' ? 'Shiprocket Logistics' : ($activeDriver === 'ekart' ? 'Ekart Logistics' : ucfirst($activeDriver)) }})
                     </span>
                     <span class="text-xs text-zinc-500">Configured via <code class="text-zinc-700 dark:text-zinc-300">config/shipping.php</code></span>
                 </div>
             </div>
+
+            @if ($activeDriver === 'shiprocket' || config('shipping.shiprocket.email'))
+            <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-850 space-y-2">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-zinc-700 dark:text-zinc-300">Shiprocket Wallet Balance</span>
+                    <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold {{ ($this->shiprocketWalletBalance ?? 0) > 100 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300' }}">
+                        ₹{{ number_format($this->shiprocketWalletBalance ?? 0, 2) }}
+                    </span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-zinc-500">
+                    <span>Courier Selection Strategy:</span>
+                    <span class="font-bold text-zinc-800 dark:text-zinc-200 uppercase">{{ config('shipping.shiprocket.courier_selection_rule', 'recommended') }}</span>
+                </div>
+            </div>
+            @endif
 
             <!-- Safe Mode Status -->
             <div class="rounded-xl p-4 {{ config('shipping.safe_mode') ? 'bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-900' : 'bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900' }}">
@@ -165,21 +210,41 @@ new #[Layout('layouts.admin')] #[Title('Shipping Settings')] class extends Compo
                 Webhook Status
             </h3>
 
-            @if ($this->webhookConfigured)
-                <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
-                    <span class="text-xs font-bold text-emerald-900 dark:text-emerald-300">Webhooks: Active and Configured</span>
-                    <p class="text-xs text-emerald-700 dark:text-emerald-400 mt-1">
-                        Endpoint: <code class="font-mono text-zinc-800 dark:text-zinc-200">{{ url('/webhooks/shipping/ekart') }}</code>
-                    </p>
-                </div>
-            @else
-                <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-800/40">
-                    <span class="text-xs font-bold text-zinc-700 dark:text-zinc-300">Webhooks: not configured — using polling</span>
-                    <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                        Ekart webhook headers and algorithm are not yet configured. The system safely falls back to background cron polling every 15 minutes.
-                    </p>
-                </div>
-            @endif
+            <div class="space-y-3">
+                <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Ekart Webhook</div>
+                @if ($this->webhookConfigured)
+                    <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+                        <span class="text-xs font-bold text-emerald-900 dark:text-emerald-300">Ekart Webhook: Active</span>
+                        <p class="text-xs text-emerald-700 dark:text-emerald-400 mt-1">
+                            Endpoint: <code class="font-mono text-zinc-800 dark:text-zinc-200">{{ url('/webhooks/shipping/ekart') }}</code>
+                        </p>
+                    </div>
+                @else
+                    <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/40">
+                        <span class="text-xs font-bold text-zinc-700 dark:text-zinc-300">Ekart Webhooks: not configured — using polling</span>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                            Ekart webhook headers not configured; relying on 15m polling.
+                        </p>
+                    </div>
+                @endif
+
+                <div class="text-xs font-semibold text-zinc-500 uppercase tracking-wider pt-1">Shiprocket Webhook</div>
+                @if ($this->shiprocketWebhookConfigured)
+                    <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+                        <span class="text-xs font-bold text-emerald-900 dark:text-emerald-300">Shiprocket Webhook: Active</span>
+                        <p class="text-xs text-emerald-700 dark:text-emerald-400 mt-1">
+                            Endpoint: <code class="font-mono text-zinc-800 dark:text-zinc-200">{{ url('/webhooks/shipping/shiprocket') }}</code>
+                        </p>
+                    </div>
+                @else
+                    <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/40">
+                        <span class="text-xs font-bold text-zinc-700 dark:text-zinc-300">Shiprocket Webhook: not configured — using polling</span>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                            Shiprocket webhook token not configured; relying on 15m polling.
+                        </p>
+                    </div>
+                @endif
+            </div>
 
             <div class="text-xs text-zinc-500 space-y-1">
                 <p>Polling Schedule: <code class="text-zinc-700 dark:text-zinc-300">shipping:poll-tracking (every 15 min)</code></p>
