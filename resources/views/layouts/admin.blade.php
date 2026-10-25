@@ -56,6 +56,17 @@
                     </a>
                     @endcan
 
+                    @can('orders.view')
+                    <a href="{{ route('admin.orders.index') }}"
+                       wire:navigate
+                       class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition {{ request()->routeIs('admin.orders.*') ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-white font-semibold' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-white' }}">
+                        <svg class="size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
+                        </svg>
+                        <span>Orders</span>
+                    </a>
+                    @endcan
+
                     @canany(['catalog.categories', 'catalog.verticals', 'catalog.brands.manage', 'catalog.products.view'])
                     <div class="pt-3 pb-1">
                         <span class="px-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Catalog</span>
@@ -243,6 +254,18 @@
                             <path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
                         </svg>
                         <span>Sellers</span>
+                    </a>
+                    @endcan
+
+                    @can('orders.view')
+                    <a href="{{ route('admin.orders.index') }}"
+                       @click="mobileMenuOpen = false"
+                       wire:navigate
+                       class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition {{ request()->routeIs('admin.orders.*') ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-white font-semibold' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-white' }}">
+                        <svg class="size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
+                        </svg>
+                        <span>Orders</span>
                     </a>
                     @endcan
 

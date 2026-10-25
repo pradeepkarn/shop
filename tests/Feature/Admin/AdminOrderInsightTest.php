@@ -602,3 +602,23 @@ test('admin customer details orders tab is permission-gated and displays custome
     $test->assertSee($order1->order_number)
         ->assertSee($order2->order_number);
 });
+
+test('admin layout menu displays orders link when admin has orders.view and hides it when not', function () {
+    $authorizedAdmin = createAdminWithPermissions([
+        AdminPermissions::ORDERS_VIEW,
+    ]);
+
+    $responseWith = $this->actingAs($authorizedAdmin, 'admin')->get(route('admin.dashboard'));
+    $responseWith->assertOk()
+        ->assertSee(route('admin.orders.index'))
+        ->assertSee('<span>Orders</span>', false);
+
+    $unauthorizedAdmin = createAdminWithPermissions([
+        AdminPermissions::CUSTOMERS_VIEW,
+    ]);
+
+    $responseWithout = $this->actingAs($unauthorizedAdmin, 'admin')->get(route('admin.dashboard'));
+    $responseWithout->assertOk()
+        ->assertDontSee(route('admin.orders.index'))
+        ->assertDontSee('<span>Orders</span>', false);
+});
