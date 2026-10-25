@@ -9,8 +9,11 @@ use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
-new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component {
+new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
+{
     public Order $order;
+
+    public int $customerLifetimeOrdersCount = 0;
 
     public function boot(): void
     {
@@ -22,8 +25,59 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
         $this->order = $order->load([
             'user',
             'sellerOrders.items',
+            'sellerOrders.sellerProfile.user',
             'sellerOrders.statusHistories',
         ]);
+
+        $this->customerLifetimeOrdersCount = $order->user_id
+            ? Order::where('user_id', $order->user_id)->count()
+            : 0;
+    }
+
+    public function canViewCustomers(): bool
+    {
+        return auth('admin')->user()?->can(AdminPermissions::CUSTOMERS_VIEW) ?? false;
+    }
+
+    public function canViewSellers(): bool
+    {
+        return auth('admin')->user()?->can(AdminPermissions::SELLERS_VIEW) ?? false;
+    }
+
+    public function maskEmail(?string $email): string
+    {
+        if (! $email) {
+            return '—';
+        }
+
+        $parts = explode('@', $email, 2);
+        if (count($parts) !== 2) {
+            return $email;
+        }
+
+        $name = $parts[0];
+        $domain = $parts[1];
+
+        $maskedName = mb_substr($name, 0, 1).'•••';
+
+        return $maskedName.'@'.$domain;
+    }
+
+    public function maskPhone(?string $phone): string
+    {
+        if (! $phone) {
+            return '—';
+        }
+
+        $cleaned = preg_replace('/[^\d+]/', '', $phone) ?? '';
+        if (strlen($cleaned) <= 4) {
+            return str_repeat('•', strlen($cleaned));
+        }
+
+        $visibleDigits = substr($cleaned, -4);
+        $maskedCount = strlen($cleaned) - 4;
+
+        return str_repeat('•', $maskedCount).$visibleDigits;
     }
 }; ?>
 
@@ -41,7 +95,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
     <div class="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <div class="flex items-center gap-3">
-                <h1 class="text-xl font-bold tracking-tight text-zinc-900 dark:text-white sm:text-2xl">
+                <h1 class="text-xl font-bold tracking-tight text-zinc-900 dark:text-white sm:text-2xl" data-test="order-number-heading">
                     Order {{ $order->order_number }}
                 </h1>
                 <span class="inline-flex items-center rounded-md px-2.5 py-1 text-xs font-bold uppercase {{ $order->status->value === 'cancelled' ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300' : ($order->status->value === 'completed' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200') }}">
@@ -55,7 +109,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
 
         <div class="text-right">
             <span class="text-xs uppercase font-semibold text-zinc-400">Total Order Value</span>
-            <div class="text-2xl font-black text-zinc-900 dark:text-white">
+            <div class="text-2xl font-black text-zinc-900 dark:text-white" data-test="order-grand-total">
                 ₹{{ number_format($order->grand_total / 100) }}
             </div>
         </div>
@@ -69,11 +123,20 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
             </h2>
 
             @foreach ($order->sellerOrders as $sellerOrder)
-                <div class="rounded-2xl border border-zinc-200 bg-white shadow-xs dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden">
+                <div class="rounded-2xl border border-zinc-200 bg-white shadow-xs dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden" data-test="seller-package-card">
                     <div class="border-b border-zinc-100 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-800/40 flex flex-wrap items-center justify-between gap-3">
                         <div>
-                            <div class="text-xs font-bold text-zinc-900 dark:text-white">
-                                Seller: {{ $sellerOrder->seller_store_name }}
+                            <div class="text-xs font-bold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                                <span>Seller:</span>
+                                @if ($sellerOrder->sellerProfile?->isAnonymized())
+                                    <span class="text-zinc-500 italic" data-test="seller-anonymized">Deleted seller</span>
+                                @elseif ($this->canViewSellers() && $sellerOrder->seller_profile_id)
+                                    <a href="{{ route('admin.sellers.show', $sellerOrder->seller_profile_id) }}" wire:navigate class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 hover:underline" data-test="seller-store-link">
+                                        {{ $sellerOrder->seller_store_name }}
+                                    </a>
+                                @else
+                                    <span data-test="seller-store-name">{{ $sellerOrder->seller_store_name }}</span>
+                                @endif
                             </div>
                             <div class="text-[11px] text-zinc-500 dark:text-zinc-400">
                                 GSTIN: {{ $sellerOrder->seller_gstin ?? 'N/A' }} • State: {{ $sellerOrder->seller_pickup_state ?? 'N/A' }}
@@ -95,6 +158,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                                     <th class="py-2.5 px-4">Item Details</th>
                                     <th class="py-2.5 px-3">HSN</th>
                                     <th class="py-2.5 px-3">GST Rate</th>
+                                    <th class="py-2.5 px-3">MRP</th>
                                     <th class="py-2.5 px-3">Unit Price</th>
                                     <th class="py-2.5 px-3">Qty</th>
                                     <th class="py-2.5 px-4 text-right">Line Total</th>
@@ -128,6 +192,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                                             {{ $item->gst_rate }}%
                                             <div class="text-[10px] text-zinc-400">(₹{{ number_format($item->gst_amount / 100, 2) }})</div>
                                         </td>
+                                        <td class="py-3 px-3 text-zinc-500 dark:text-zinc-400 line-through">₹{{ number_format($item->mrp / 100) }}</td>
                                         <td class="py-3 px-3 font-semibold text-zinc-900 dark:text-white">₹{{ number_format($item->unit_price / 100) }}</td>
                                         <td class="py-3 px-3 text-zinc-700 dark:text-zinc-300 font-bold">{{ $item->qty }}</td>
                                         <td class="py-3 px-4 text-right font-bold text-zinc-900 dark:text-white">₹{{ number_format($item->line_total / 100) }}</td>
@@ -135,6 +200,36 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                                 @endforeach
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- Package Totals Summary -->
+                    @php
+                        $packageMrp = $sellerOrder->items->sum(fn ($i) => $i->mrp * $i->qty);
+                        $packageGst = $sellerOrder->items->sum('gst_amount');
+                    @endphp
+                    <div class="border-t border-zinc-100 bg-zinc-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-800/20">
+                        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+                            <div>
+                                <span class="text-zinc-400 block text-[11px]">MRP Total</span>
+                                <span class="font-bold text-zinc-700 dark:text-zinc-300">₹{{ number_format($packageMrp / 100) }}</span>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 block text-[11px]">Discount Total</span>
+                                <span class="font-bold text-emerald-600 dark:text-emerald-400">−₹{{ number_format($sellerOrder->discount_total / 100) }}</span>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 block text-[11px]">GST Total</span>
+                                <span class="font-bold text-zinc-700 dark:text-zinc-300">₹{{ number_format($packageGst / 100, 2) }}</span>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 block text-[11px]">Package Total</span>
+                                <span class="font-bold text-zinc-900 dark:text-white">₹{{ number_format($sellerOrder->grand_total / 100) }}</span>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 block text-[11px]">COD to Collect</span>
+                                <span class="font-bold text-zinc-900 dark:text-white">₹{{ number_format($sellerOrder->grand_total / 100) }}</span>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Package Status Timeline -->
@@ -162,17 +257,58 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
             @endforeach
         </div>
 
-        <!-- Sidebar: Customer & Delivery Details -->
+        <!-- Sidebar: Customer & Delivery Details & Per-Seller Split -->
         <div class="space-y-6">
             <!-- Customer Card -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
-                <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">Customer Information</h2>
-                <div class="space-y-1.5 text-xs">
-                    <div class="font-bold text-zinc-900 dark:text-white">{{ $order->user->name ?? 'Deleted Customer' }}</div>
-                    <div class="text-zinc-600 dark:text-zinc-400">{{ $order->user->email ?? 'N/A' }}</div>
-                    @if ($order->user?->phone)
-                        <div class="text-zinc-600 dark:text-zinc-400">{{ $order->user->phone }}</div>
+                <div class="flex items-center justify-between mb-3">
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400">Customer Information</h2>
+                    @if ($order->user_id && $this->canViewCustomers() && $order->user && ! $order->user->isAnonymized())
+                        <a href="{{ route('admin.customers.show', $order->user_id) }}" wire:navigate class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 hover:underline" data-test="view-customer-profile-link">
+                            View Profile &rarr;
+                        </a>
                     @endif
+                </div>
+                <div class="space-y-2 text-xs">
+                    <div>
+                        <span class="text-zinc-500 dark:text-zinc-400 block text-[11px]">Name</span>
+                        @if ($order->user?->isAnonymized())
+                            <span class="font-bold text-zinc-500 italic" data-test="customer-anonymized">Deleted user</span>
+                        @elseif ($this->canViewCustomers() && $order->user_id && $order->user)
+                            <a href="{{ route('admin.customers.show', $order->user_id) }}" wire:navigate class="font-bold text-zinc-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400" data-test="customer-name-link">
+                                {{ $order->user->name }}
+                            </a>
+                        @else
+                            <span class="font-bold text-zinc-900 dark:text-white" data-test="customer-name-text">{{ $order->user->name ?? 'Deleted user' }}</span>
+                        @endif
+                    </div>
+
+                    <div>
+                        <span class="text-zinc-500 dark:text-zinc-400 block text-[11px]">Email</span>
+                        <span class="text-zinc-700 dark:text-zinc-300" data-test="customer-email-display">
+                            @if ($this->canViewCustomers())
+                                {{ $order->user->email ?? '—' }}
+                            @else
+                                {{ $this->maskEmail($order->user?->email) }}
+                            @endif
+                        </span>
+                    </div>
+
+                    <div>
+                        <span class="text-zinc-500 dark:text-zinc-400 block text-[11px]">Phone</span>
+                        <span class="text-zinc-700 dark:text-zinc-300" data-test="customer-phone-display">
+                            @if ($this->canViewCustomers())
+                                {{ $order->user->phone ?? '—' }}
+                            @else
+                                {{ $this->maskPhone($order->user?->phone) }}
+                            @endif
+                        </span>
+                    </div>
+
+                    <div class="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex justify-between items-center text-xs">
+                        <span class="text-zinc-500 dark:text-zinc-400">Lifetime Orders</span>
+                        <span class="font-bold text-zinc-900 dark:text-white" data-test="customer-lifetime-orders">{{ $customerLifetimeOrdersCount }}</span>
+                    </div>
                 </div>
             </div>
 
@@ -180,7 +316,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
             <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
                 <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">Delivery Address Snapshot</h2>
                 @php $addr = $order->delivery_address; @endphp
-                <div class="space-y-1 text-xs text-zinc-700 dark:text-zinc-300">
+                <div class="space-y-1 text-xs text-zinc-700 dark:text-zinc-300" data-test="delivery-address-card">
                     <div class="font-bold text-zinc-900 dark:text-white">{{ $addr['name'] ?? '' }}</div>
                     <div>Phone: <span class="font-semibold">{{ $addr['phone'] ?? '' }}</span></div>
                     <div>{{ $addr['address_line'] ?? '' }}</div>
@@ -194,29 +330,53 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                 </div>
             </div>
 
-            <!-- Price Breakdown -->
-            <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
-                <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">Payment & Totals</h2>
-                <div class="space-y-2 text-xs">
-                    <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
-                        <span>Items MRP</span>
-                        <span>₹{{ number_format($order->items_mrp_total / 100) }}</span>
+            <!-- Payment & Totals & Per-Seller Split -->
+            <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
+                <div>
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">Payment & Totals</h2>
+                    <div class="space-y-2 text-xs">
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Items MRP</span>
+                            <span>₹{{ number_format($order->items_mrp_total / 100) }}</span>
+                        </div>
+                        <div class="flex justify-between text-emerald-600 dark:text-emerald-400">
+                            <span>Catalog Discount</span>
+                            <span>−₹{{ number_format($order->discount_total / 100) }}</span>
+                        </div>
+                        <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Delivery Fee</span>
+                            <span>{{ $order->delivery_fee === 0 ? 'FREE' : '₹' . number_format($order->delivery_fee / 100) }}</span>
+                        </div>
+                        <div class="border-t border-zinc-100 pt-2 flex justify-between font-bold text-sm text-zinc-900 dark:text-white dark:border-zinc-800">
+                            <span>Grand Total</span>
+                            <span data-test="sidebar-grand-total">₹{{ number_format($order->grand_total / 100) }}</span>
+                        </div>
                     </div>
-                    <div class="flex justify-between text-emerald-600 dark:text-emerald-400">
-                        <span>Catalog Discount</span>
-                        <span>−₹{{ number_format($order->discount_total / 100) }}</span>
-                    </div>
-                    <div class="flex justify-between text-zinc-600 dark:text-zinc-400">
-                        <span>Delivery Fee</span>
-                        <span>{{ $order->delivery_fee === 0 ? 'FREE' : '₹' . number_format($order->delivery_fee / 100) }}</span>
-                    </div>
-                    <div class="border-t border-zinc-100 pt-2 flex justify-between font-bold text-sm text-zinc-900 dark:text-white dark:border-zinc-800">
-                        <span>Grand Total</span>
-                        <span>₹{{ number_format($order->grand_total / 100) }}</span>
+                </div>
+
+                <!-- Per-Seller Split -->
+                <div class="border-t border-zinc-100 pt-4 dark:border-zinc-800" data-test="per-seller-split-section">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2.5">Per-Seller Split</h3>
+                    <div class="space-y-2 text-xs">
+                        @foreach ($order->sellerOrders as $so)
+                            @php
+                                $pct = $order->grand_total > 0 ? round(($so->grand_total / $order->grand_total) * 100, 1) : 0;
+                            @endphp
+                            <div class="flex items-center justify-between text-zinc-700 dark:text-zinc-300" data-test="seller-split-row">
+                                <span class="truncate max-w-[140px]" title="{{ $so->seller_store_name }}">{{ $so->seller_store_name }}</span>
+                                <span class="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                                    <span data-test="seller-split-amount">₹{{ number_format($so->grand_total / 100) }}</span>
+                                    <span class="text-[11px] text-zinc-400 font-normal" data-test="seller-split-pct">({{ $pct }}%)</span>
+                                </span>
+                            </div>
+                        @endforeach
+                        <div class="border-t border-dashed border-zinc-200 pt-2 flex justify-between font-bold text-zinc-900 dark:text-white dark:border-zinc-800">
+                            <span>Total Package Split</span>
+                            <span data-test="split-grand-total">₹{{ number_format($order->sellerOrders->sum('grand_total') / 100) }}</span>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
-

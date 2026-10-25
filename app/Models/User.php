@@ -127,6 +127,14 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     }
 
     /**
+     * Check if user account has been anonymized.
+     */
+    public function isAnonymized(): bool
+    {
+        return $this->name === 'Deleted user' || str_starts_with($this->email, 'deleted+');
+    }
+
+    /**
      * Check if user has any historical orders as customer or seller.
      */
     public function hasAnyOrders(): bool
