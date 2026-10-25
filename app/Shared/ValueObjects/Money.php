@@ -45,11 +45,43 @@ final class Money
     }
 
     /**
-     * Format as Indian Rupee string, e.g. "₹1,000.00"
+     * Format as Indian Rupee string with Indian digit grouping (lakhs, crores),
+     * e.g. "₹23,65,669.00", "₹1,00,000.00", "₹999.00", "−₹1,234.00".
      */
     public function format(): string
     {
-        return '₹'.number_format($this->toRupees(), 2);
+        $isNegative = $this->paise < 0;
+        $absPaise = abs($this->paise);
+
+        $rupees = intdiv($absPaise, 100);
+        $paiseRemainder = $absPaise % 100;
+
+        $rupeesStr = (string) $rupees;
+        $length = strlen($rupeesStr);
+
+        if ($length <= 3) {
+            $formattedRupees = $rupeesStr;
+        } else {
+            $lastThree = substr($rupeesStr, -3);
+            $remaining = substr($rupeesStr, 0, -3);
+
+            $remainingLength = strlen($remaining);
+            $firstGroupLength = $remainingLength % 2 === 0 ? 2 : 1;
+
+            $pairs = [substr($remaining, 0, $firstGroupLength)];
+
+            for ($i = $firstGroupLength; $i < $remainingLength; $i += 2) {
+                $pairs[] = substr($remaining, $i, 2);
+            }
+
+            $formattedRupees = implode(',', $pairs).','.$lastThree;
+        }
+
+        $formattedAmount = sprintf('%s.%02d', $formattedRupees, $paiseRemainder);
+
+        return $isNegative
+            ? "−₹{$formattedAmount}"
+            : "₹{$formattedAmount}";
     }
 
     /**
