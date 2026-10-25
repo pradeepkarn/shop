@@ -79,7 +79,7 @@ new #[Layout('layouts.admin')] #[Title('Fee Schedule Details')] class extends Co
             </div>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                 @if ($sched->effective_from)
-                    Effective: {{ $sched->effective_from->format('d M Y, h:i A') }} &rarr; {{ $sched->effective_to ? $sched->effective_to->format('d M Y, h:i A') : 'Ongoing' }}
+                    Effective: @datetime($sched->effective_from) &rarr; {{ $sched->effective_to ? format_datetime($sched->effective_to) : 'Ongoing' }}
                 @else
                     Draft schedule &middot; Not active yet
                 @endif

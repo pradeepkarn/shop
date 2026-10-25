@@ -12,6 +12,7 @@ use App\Models\Admin;
 use App\Services\CartService;
 use Carbon\CarbonImmutable;
 use Illuminate\Session\Middleware\AuthenticateSession;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -26,6 +27,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        require_once __DIR__.'/../Support/helpers.php';
+
         $this->app->scoped(CartService::class);
     }
 
@@ -35,6 +38,14 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureDefaults();
+
+        Blade::directive('datetime', function (string $expression): string {
+            return "<?php echo \App\Support\DateFormatter::format({$expression}); ?>";
+        });
+
+        Blade::directive('date', function (string $expression): string {
+            return "<?php echo \App\Support\DateFormatter::formatDate({$expression}); ?>";
+        });
 
         Gate::before(function ($user, string $ability): ?bool {
             if ($user instanceof Admin && $user->isSuperAdmin()) {

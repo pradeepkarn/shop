@@ -2,9 +2,14 @@
 
 namespace App\Livewire\Seller;
 
+use App\Orders\Contracts\SellerOrderShippingDetailsLookupInterface;
 use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Models\SellerOrder;
 use App\Orders\Services\OrderService;
+use App\Sellers\Contracts\SellerPickupAddressLookupInterface;
+use App\Shipping\Contracts\CarrierManagerInterface;
+use App\Shipping\Contracts\ShipmentLookupInterface;
+use App\Shipping\Contracts\ShipmentServiceInterface;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -16,6 +21,24 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
     public bool $showCancelModal = false;
 
     public string $cancelReason = '';
+
+    public bool $showShipModal = false;
+
+    public string $courierName = '';
+
+    public string $trackingNumber = '';
+
+    public bool $showReadyToShipModal = false;
+
+    public int $boxWeightGrams = 500;
+
+    public int $boxLengthCm = 15;
+
+    public int $boxWidthCm = 10;
+
+    public int $boxHeightCm = 5;
+
+    public ?string $boxPickupDate = null;
 
     public function mount(string $sellerOrder): void
     {
@@ -86,6 +109,41 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
         }
     }
 
+    public function confirmShip(OrderService $orderService): void
+    {
+        $order = $this->order;
+        if (! $order) {
+            return;
+        }
+
+        $this->authorize('update', $order);
+
+        $this->validate([
+            'courierName' => ['required', 'string', 'min:2', 'max:100'],
+            'trackingNumber' => ['required', 'string', 'min:3', 'max:100'],
+        ]);
+
+        try {
+            $orderService->transitionSellerOrderStatus(
+                $order,
+                SellerOrderStatus::Shipped,
+                'seller',
+                auth()->id(),
+                "Order shipped via {$this->courierName} (Tracking: {$this->trackingNumber})",
+                $this->courierName,
+                $this->trackingNumber
+            );
+
+            session()->flash('order_success', 'Order marked as Shipped.');
+            $this->showShipModal = false;
+            $this->courierName = '';
+            $this->trackingNumber = '';
+            unset($this->order);
+        } catch (\DomainException $e) {
+            session()->flash('order_error', $e->getMessage());
+        }
+    }
+
     public function confirmCancel(OrderService $orderService): void
     {
         $order = $this->order;
@@ -108,6 +166,113 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
             unset($this->order);
         } catch (\DomainException $e) {
             session()->flash('order_error', $e->getMessage());
+        }
+    }
+
+    public function openReadyToShipModal(SellerOrderShippingDetailsLookupInterface $lookup): void
+    {
+        $details = $lookup->getShippingDetails($this->sellerOrderId);
+        if ($details) {
+            $this->boxWeightGrams = $details->estimatedTotalWeightGrams;
+            $maxL = 15;
+            $maxW = 10;
+            $maxH = 5;
+            foreach ($details->items as $item) {
+                $maxL = max($maxL, $item->lengthCm);
+                $maxW = max($maxW, $item->widthCm);
+                $maxH = max($maxH, $item->heightCm);
+            }
+            $this->boxLengthCm = $maxL;
+            $this->boxWidthCm = $maxW;
+            $this->boxHeightCm = $maxH;
+        }
+
+        $this->boxPickupDate = now('Asia/Kolkata')->addDay()->toDateString();
+        $this->showReadyToShipModal = true;
+    }
+
+    public function manifestShipment(ShipmentServiceInterface $shipmentService): void
+    {
+        $order = $this->order;
+        if (! $order) {
+            return;
+        }
+
+        $this->authorize('update', $order);
+
+        $this->validate([
+            'boxWeightGrams' => ['required', 'integer', 'min:50', 'max:50000'],
+            'boxLengthCm' => ['required', 'integer', 'min:1', 'max:200'],
+            'boxWidthCm' => ['required', 'integer', 'min:1', 'max:200'],
+            'boxHeightCm' => ['required', 'integer', 'min:1', 'max:200'],
+            'boxPickupDate' => ['nullable', 'date'],
+        ]);
+
+        try {
+            $shipment = $shipmentService->createShipmentForSellerOrder(
+                sellerOrderId: $order->id,
+                actualWeightGrams: $this->boxWeightGrams,
+                lengthCm: $this->boxLengthCm,
+                widthCm: $this->boxWidthCm,
+                heightCm: $this->boxHeightCm,
+                pickupDate: $this->boxPickupDate,
+            );
+
+            session()->flash('order_success', "Shipment manifested successfully with {$shipment->provider} (AWB: {$shipment->awb}). Packing label is ready.");
+            $this->showReadyToShipModal = false;
+            unset($this->order);
+        } catch (\DomainException $e) {
+            session()->flash('order_error', $e->getMessage());
+        }
+    }
+
+    public function cancelShipmentAction(string $shipmentId, ShipmentServiceInterface $shipmentService): void
+    {
+        $order = $this->order;
+        if (! $order) {
+            return;
+        }
+
+        $this->authorize('update', $order);
+
+        try {
+            $shipmentService->cancelShipment(
+                shipmentId: $shipmentId,
+                actorType: 'seller',
+                actorId: auth()->id(),
+                reason: 'Shipment cancelled by seller'
+            );
+
+            session()->flash('order_success', 'Shipment cancelled. Order reverted to Packed status.');
+            unset($this->order);
+        } catch (\DomainException $e) {
+            session()->flash('order_error', $e->getMessage());
+        }
+    }
+
+    public function registerWarehouseAction(CarrierManagerInterface $carrierManager, SellerPickupAddressLookupInterface $addressLookup): void
+    {
+        $order = $this->order;
+        if (! $order) {
+            return;
+        }
+
+        $this->authorize('update', $order);
+
+        $addr = $addressLookup->getSellerPickupAddress($order->seller_profile_id);
+        if (! $addr) {
+            session()->flash('order_error', 'Seller pickup address not found.');
+
+            return;
+        }
+
+        $driver = $carrierManager->driver();
+        $res = $driver->registerPickupAddress($addr);
+
+        if ($res->success) {
+            session()->flash('order_success', "Warehouse registered with carrier (Alias: {$res->alias}).");
+        } else {
+            session()->flash('order_error', 'Warehouse registration failed: '.$res->message);
         }
     }
 }; ?>
@@ -135,6 +300,9 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
         $feeLookup = app(App\Fees\Contracts\OrderItemFeeSnapshotLookupInterface::class);
         $feeSummary = $sellerOrder ? $feeLookup->getSellerOrderFeeSummary($sellerOrder->id, $sellerOrder->seller_profile_id) : null;
         $itemSnapshots = $sellerOrder ? collect($feeLookup->getSnapshotsForSellerOrder($sellerOrder->id, $sellerOrder->seller_profile_id))->keyBy(fn ($s) => $s->orderItemId) : collect();
+        $shipmentLookup = app(\App\Shipping\Contracts\ShipmentLookupInterface::class);
+        $shipment = $sellerOrder ? $shipmentLookup->getShipmentForSellerOrder($sellerOrder->id) : null;
+        $warehouseProfile = $sellerOrder ? $shipmentLookup->getSellerShippingProfile($sellerOrder->seller_profile_id) : null;
     @endphp
 
     <!-- Header Section with Action Buttons -->
@@ -145,8 +313,15 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                 {{ $sellerOrder->order->order_number ?? $sellerOrder->id }}
             </h1>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                Placed on {{ $sellerOrder->placed_at->format('d M Y, h:i A') }}
+                Placed on @datetime($sellerOrder->placed_at)
             </p>
+            @if ($sellerOrder->courier_name || $sellerOrder->tracking_number)
+                <div class="mt-2 inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                    <span class="font-bold text-zinc-900 dark:text-white">Courier:</span> {{ $sellerOrder->courier_name ?? '—' }}
+                    <span class="text-zinc-300 dark:text-zinc-600">&bull;</span>
+                    <span class="font-bold text-zinc-900 dark:text-white">Tracking:</span> <span class="font-mono">{{ $sellerOrder->tracking_number ?? '—' }}</span>
+                </div>
+            @endif
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
@@ -172,6 +347,33 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                 >
                     Mark as Packed
                 </button>
+            @endif
+
+            @if ($sellerOrder->status->canShip() && ! $this->showReadyToShipModal && ! $this->showShipModal)
+                <button
+                    type="button"
+                    wire:click="openReadyToShipModal"
+                    class="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-indigo-700 transition"
+                >
+                    Ready to Ship (Ekart)
+                </button>
+                <button
+                    type="button"
+                    wire:click="$set('showShipModal', true)"
+                    class="rounded-xl border border-zinc-300 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 transition"
+                >
+                    Manual Dispatch
+                </button>
+            @endif
+
+            @if ($shipment && $shipment->labelPath)
+                <a
+                    href="{{ route('shipping.shipments.label', ['shipment' => $shipment->id]) }}"
+                    target="_blank"
+                    class="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-emerald-700 transition"
+                >
+                    Download Label
+                </a>
             @endif
 
             @if ($sellerOrder->status->canCancelBySeller() && ! $this->showCancelModal)
@@ -216,6 +418,157 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                     class="text-xs font-semibold text-zinc-500 hover:text-zinc-800 dark:text-zinc-400"
                 >
                     Nevermind
+                </button>
+            </div>
+        </div>
+    @endif
+
+    <!-- Ready to Ship (Carrier Manifestation) Modal -->
+    @if ($this->showReadyToShipModal)
+        @php
+            $divisor = (int) config('shipping.volumetric_divisor', 5000);
+            $volWeight = (int) round(($this->boxLengthCm * $this->boxWidthCm * $this->boxHeightCm) / $divisor * 1000);
+            $chargeableWeight = max($this->boxWeightGrams, $volWeight);
+        @endphp
+        <div class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+            <div class="flex items-start justify-between">
+                <div>
+                    <h3 class="text-base font-bold text-indigo-950 dark:text-indigo-200">Ready to Ship: Carrier Manifestation</h3>
+                    <p class="mt-1 text-xs text-indigo-800 dark:text-indigo-400">
+                        Specify actual package box weight and dimensions. Volumetric weight will be automatically calculated.
+                    </p>
+                </div>
+                <button type="button" wire:click="$set('showReadyToShipModal', false)" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 text-sm font-bold">&times;</button>
+            </div>
+
+            <!-- Warehouse Registration Warning -->
+            @if ($warehouseProfile && $warehouseProfile->isRegistered)
+                <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300 flex items-center justify-between">
+                    <span>✓ Warehouse registered with carrier: <strong>{{ $warehouseProfile->warehouseAlias }}</strong></span>
+                </div>
+            @else
+                <div class="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300 flex items-center justify-between gap-3">
+                    <span>⚠️ Pickup warehouse not yet registered with Ekart. You can sync it now.</span>
+                    <button type="button" wire:click="registerWarehouseAction" class="rounded-lg bg-amber-600 px-3 py-1 text-xs font-bold text-white hover:bg-amber-700">
+                        Register Warehouse Now
+                    </button>
+                </div>
+            @endif
+
+            <div class="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 mb-1">
+                        Actual Weight (grams) <span class="text-red-500">*</span>
+                    </label>
+                    <input type="number" min="50" step="10" wire:model.live="boxWeightGrams" class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                    @error('boxWeightGrams') <span class="text-xs text-red-500">{{ $message }}</span> @enderror
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 mb-1">
+                        Length (cm) <span class="text-red-500">*</span>
+                    </label>
+                    <input type="number" min="1" step="1" wire:model.live="boxLengthCm" class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                    @error('boxLengthCm') <span class="text-xs text-red-500">{{ $message }}</span> @enderror
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 mb-1">
+                        Width (cm) <span class="text-red-500">*</span>
+                    </label>
+                    <input type="number" min="1" step="1" wire:model.live="boxWidthCm" class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                    @error('boxWidthCm') <span class="text-xs text-red-500">{{ $message }}</span> @enderror
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 mb-1">
+                        Height (cm) <span class="text-red-500">*</span>
+                    </label>
+                    <input type="number" min="1" step="1" wire:model.live="boxHeightCm" class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                    @error('boxHeightCm') <span class="text-xs text-red-500">{{ $message }}</span> @enderror
+                </div>
+            </div>
+
+            <!-- Weight Summary calculation pill -->
+            <div class="mt-4 flex flex-wrap items-center gap-4 text-xs bg-white dark:bg-zinc-900 p-3 rounded-xl border border-indigo-100 dark:border-zinc-800">
+                <span class="text-zinc-600 dark:text-zinc-400">Actual: <strong class="text-zinc-900 dark:text-white">{{ number_format($this->boxWeightGrams) }} g</strong></span>
+                <span class="text-zinc-300 dark:text-zinc-700">&bull;</span>
+                <span class="text-zinc-600 dark:text-zinc-400">Volumetric: <strong class="text-zinc-900 dark:text-white">{{ number_format($volWeight) }} g</strong> <span class="text-[10px] text-zinc-400">(L&times;W&times;H / 5000)</span></span>
+                <span class="text-zinc-300 dark:text-zinc-700">&bull;</span>
+                <span class="text-indigo-700 dark:text-indigo-400 font-bold">Chargeable Weight: {{ number_format($chargeableWeight) }} g</span>
+            </div>
+
+            <div class="mt-4 max-w-xs">
+                <label class="block text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 mb-1">
+                    Preferred Dispatch Date
+                </label>
+                <input type="date" wire:model="boxPickupDate" class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+            </div>
+
+            <div class="mt-6 flex items-center gap-3">
+                <button
+                    type="button"
+                    wire:click="manifestShipment"
+                    wire:loading.attr="disabled"
+                    class="rounded-xl bg-indigo-600 px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-indigo-700 transition"
+                >
+                    Manifest Shipment & Generate Label
+                </button>
+                <button
+                    type="button"
+                    wire:click="$set('showReadyToShipModal', false)"
+                    class="text-xs font-semibold text-zinc-500 hover:text-zinc-800 dark:text-zinc-400"
+                >
+                    Cancel
+                </button>
+            </div>
+        </div>
+    @endif
+
+    <!-- Shipping Prompt Form -->
+    @if ($this->showShipModal)
+        <div class="rounded-2xl border border-purple-200 bg-purple-50/50 p-5 dark:border-purple-900/60 dark:bg-purple-950/30">
+            <h3 class="text-sm font-bold text-purple-900 dark:text-purple-300">Dispatch & Ship Package</h3>
+            <p class="mt-1 text-xs text-purple-700 dark:text-purple-400">
+                Enter your logistics partner and tracking number. Once shipped, delivery will be tracked by marketplace administration.
+            </p>
+            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-purple-800 dark:text-purple-300 mb-1">
+                        Courier Name <span class="text-red-500">*</span>
+                    </label>
+                    <input
+                        type="text"
+                        wire:model="courierName"
+                        placeholder="e.g. Delhivery, Blue Dart, DTDC, Xpressbees"
+                        class="w-full rounded-lg border border-purple-200 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    />
+                    @error('courierName') <span class="text-xs text-red-500 font-medium">{{ $message }}</span> @enderror
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-purple-800 dark:text-purple-300 mb-1">
+                        Tracking Number / AWB <span class="text-red-500">*</span>
+                    </label>
+                    <input
+                        type="text"
+                        wire:model="trackingNumber"
+                        placeholder="e.g. DEL987654321"
+                        class="w-full rounded-lg border border-purple-200 bg-white px-3 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    />
+                    @error('trackingNumber') <span class="text-xs text-red-500 font-medium">{{ $message }}</span> @enderror
+                </div>
+            </div>
+            <div class="mt-4 flex items-center gap-3">
+                <button
+                    type="button"
+                    wire:click="confirmShip"
+                    class="rounded-xl bg-purple-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-purple-700 transition"
+                >
+                    Confirm Shipment
+                </button>
+                <button
+                    type="button"
+                    wire:click="$set('showShipModal', false)"
+                    class="text-xs font-semibold text-zinc-500 hover:text-zinc-800 dark:text-zinc-400"
+                >
+                    Cancel
                 </button>
             </div>
         </div>
@@ -292,6 +645,98 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                 </div>
             </div>
 
+            <!-- Carrier Shipment & Tracking Timeline -->
+            @if ($shipment)
+                <div class="rounded-2xl border border-zinc-200 bg-white shadow-xs dark:border-zinc-800 dark:bg-zinc-900 overflow-hidden">
+                    <div class="border-b border-zinc-100 bg-zinc-50/50 px-6 py-3.5 flex items-center justify-between dark:border-zinc-800 dark:bg-zinc-800/30">
+                        <span class="text-xs font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
+                            Logistics Shipment ({{ strtoupper($shipment->provider) }})
+                        </span>
+                        <span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-bold {{ $shipment->status->badgeClasses() }}">
+                            {{ $shipment->status->label() }}
+                        </span>
+                    </div>
+
+                    <div class="p-6 space-y-4">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                            <div>
+                                <span class="text-zinc-400 uppercase text-[10px] font-bold">Waybill / AWB</span>
+                                <p class="font-mono font-bold text-zinc-900 dark:text-white mt-0.5">{{ $shipment->awb ?? '—' }}</p>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 uppercase text-[10px] font-bold">Chargeable Weight</span>
+                                <p class="font-bold text-zinc-900 dark:text-white mt-0.5">{{ number_format($shipment->chargeableWeightGrams) }} g</p>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 uppercase text-[10px] font-bold">Box (L &times; W &times; H)</span>
+                                <p class="font-bold text-zinc-900 dark:text-white mt-0.5">{{ $shipment->lengthCm }} &times; {{ $shipment->widthCm }} &times; {{ $shipment->heightCm }} cm</p>
+                            </div>
+                            <div>
+                                <span class="text-zinc-400 uppercase text-[10px] font-bold">Pickup Date</span>
+                                <p class="font-bold text-zinc-900 dark:text-white mt-0.5">{{ $shipment->pickupDate ? $shipment->pickupDate->format('d M Y') : 'Immediate' }}</p>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-3 pt-2">
+                            @if ($shipment->labelPath)
+                                <a
+                                    href="{{ route('shipping.shipments.label', ['shipment' => $shipment->id]) }}"
+                                    target="_blank"
+                                    class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-emerald-700 transition"
+                                >
+                                    <span>Download Packing Label</span>
+                                </a>
+                            @endif
+
+                            @if ($shipment->publicTrackingUrl)
+                                <a
+                                    href="{{ $shipment->publicTrackingUrl }}"
+                                    target="_blank"
+                                    class="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 transition"
+                                >
+                                    <span>Track on {{ strtoupper($shipment->provider) }} &rarr;</span>
+                                </a>
+                            @endif
+
+                            @if (! $shipment->status->isTerminal())
+                                <button
+                                    type="button"
+                                    wire:click="cancelShipmentAction('{{ $shipment->id }}')"
+                                    wire:confirm="Cancel this shipment? The package will be cancelled and order reverted to Packed."
+                                    class="rounded-xl border border-red-300 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-zinc-800 dark:text-red-300 transition"
+                                >
+                                    Cancel Shipment
+                                </button>
+                            @endif
+                        </div>
+
+                        <!-- Tracking Events Timeline -->
+                        @if (! empty($shipment->events))
+                            <div class="mt-6 border-t border-zinc-100 dark:border-zinc-800 pt-4">
+                                <h4 class="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3">Shipment History</h4>
+                                <ol class="relative border-l border-zinc-200 dark:border-zinc-700 ml-3 space-y-4">
+                                    @foreach ($shipment->events as $evt)
+                                        <li class="ml-4">
+                                            <div class="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border border-white bg-indigo-600 dark:border-zinc-900"></div>
+                                            <div class="flex items-baseline justify-between gap-2">
+                                                <span class="text-xs font-bold text-zinc-900 dark:text-white">{{ $evt->providerStatus }}</span>
+                                                <time class="text-[10px] text-zinc-400">@datetime($evt->occurredAt)</time>
+                                            </div>
+                                            @if ($evt->location)
+                                                <p class="text-xs text-zinc-500 dark:text-zinc-400">{{ $evt->location }}</p>
+                                            @endif
+                                            @if ($evt->description)
+                                                <p class="text-xs text-zinc-600 dark:text-zinc-300 mt-0.5">{{ $evt->description }}</p>
+                                            @endif
+                                        </li>
+                                    @endforeach
+                                </ol>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+            @endif
+
             <!-- Activity Log -->
             <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
                 <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-3 dark:border-zinc-800">
@@ -303,7 +748,7 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                             <span class="mt-1 h-2 w-2 rounded-full bg-amber-500"></span>
                             <div>
                                 <span class="font-bold text-zinc-900 dark:text-white">{{ ucfirst($log->to_status) }}</span>
-                                <span class="text-zinc-500">by {{ ucfirst($log->changed_by_type) }} on {{ $log->created_at->format('d M Y, h:i A') }}</span>
+                                <span class="text-zinc-500">by {{ ucfirst($log->changed_by_type) }} on @datetime($log->created_at)</span>
                                 @if ($log->reason)
                                     <p class="mt-0.5 text-zinc-600 dark:text-zinc-400 italic">"{{ $log->reason }}"</p>
                                 @endif
@@ -323,6 +768,17 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                 <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-3 dark:border-zinc-800">
                     Package Value & Deductions
                 </h3>
+
+                @if ($sellerOrder->invoice_number)
+                    <div class="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 text-xs dark:border-indigo-900/50 dark:bg-indigo-950/20">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">GST Tax Invoice</span>
+                        <p class="font-mono font-bold text-zinc-900 dark:text-white mt-0.5">{{ $sellerOrder->invoice_number }}</p>
+                        @if ($sellerOrder->invoice_date)
+                            <p class="text-[11px] text-zinc-500">Date: @datetime($sellerOrder->invoice_date)</p>
+                        @endif
+                    </div>
+                @endif
+
                 <div class="flex items-baseline justify-between">
                     <span class="text-xs text-zinc-600 dark:text-zinc-400">Gross Package Value</span>
                     <span class="text-lg font-bold text-zinc-900 dark:text-white">

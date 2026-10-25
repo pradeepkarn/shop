@@ -130,8 +130,8 @@ new #[Layout('layouts.admin')] #[Title('Fee Schedules')] class extends Component
                         </td>
                         <td class="px-6 py-4 text-zinc-600 dark:text-zinc-400">
                             @if ($sched->effective_from)
-                                <div>From: {{ $sched->effective_from->format('d M Y, h:i A') }}</div>
-                                <div>To: {{ $sched->effective_to ? $sched->effective_to->format('d M Y, h:i A') : 'Ongoing (Current)' }}</div>
+                                <div>From: @datetime($sched->effective_from)</div>
+                                <div>To: {{ $sched->effective_to ? format_datetime($sched->effective_to) : 'Ongoing (Current)' }}</div>
                             @else
                                 <span class="italic text-zinc-400">Not yet activated</span>
                             @endif

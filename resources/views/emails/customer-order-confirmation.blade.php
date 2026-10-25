@@ -15,6 +15,7 @@
 
         <div style="background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px; margin: 24px 0;">
             <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: bold;">Order Summary</p>
+            <p style="margin: 0 0 4px 0; font-size: 13px; color: #52525b;">Placed on: <strong>@datetime($order->placed_at)</strong></p>
             <p style="margin: 0; font-size: 13px; color: #52525b;">Total Amount: <strong>₹{{ number_format($order->grand_total / 100) }}</strong></p>
             <p style="margin: 4px 0 0 0; font-size: 13px; color: #52525b;">Payment: Cash on Delivery</p>
         </div>

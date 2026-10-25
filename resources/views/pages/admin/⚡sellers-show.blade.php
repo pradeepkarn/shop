@@ -10,6 +10,7 @@ use App\Orders\Models\OrderItem;
 use App\Orders\Models\SellerOrder;
 use App\Services\AdminActivityLogger;
 use App\Support\AdminPermissions;
+use App\Support\DateFormatter;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
@@ -116,21 +117,22 @@ new #[Layout('layouts.admin')] #[Title('Review Seller Application')] class exten
     {
         $column = $prefix.'placed_at';
         if ($this->ordersDatePreset === 'today') {
-            $q->whereBetween($column, [now()->startOfDay(), now()->endOfDay()]);
+            [$start, $end] = DateFormatter::todayRange();
+            $q->whereBetween($column, [$start, $end]);
         } elseif ($this->ordersDatePreset === '7_days') {
-            $q->whereBetween($column, [now()->subDays(7)->startOfDay(), now()->endOfDay()]);
+            [$start, $end] = DateFormatter::lastDaysRange(7);
+            $q->whereBetween($column, [$start, $end]);
         } elseif ($this->ordersDatePreset === '30_days') {
-            $q->whereBetween($column, [now()->subDays(30)->startOfDay(), now()->endOfDay()]);
+            [$start, $end] = DateFormatter::lastDaysRange(30);
+            $q->whereBetween($column, [$start, $end]);
         } elseif ($this->ordersDatePreset === 'custom') {
-            if ($this->ordersDateFrom && $this->ordersDateTo) {
-                $q->whereBetween($column, [
-                    Carbon::parse($this->ordersDateFrom)->startOfDay(),
-                    Carbon::parse($this->ordersDateTo)->endOfDay(),
-                ]);
-            } elseif ($this->ordersDateFrom) {
-                $q->where($column, '>=', Carbon::parse($this->ordersDateFrom)->startOfDay());
-            } elseif ($this->ordersDateTo) {
-                $q->where($column, '<=', Carbon::parse($this->ordersDateTo)->endOfDay());
+            [$start, $end] = DateFormatter::parseCustomRange($this->ordersDateFrom, $this->ordersDateTo);
+            if ($start && $end) {
+                $q->whereBetween($column, [$start, $end]);
+            } elseif ($start) {
+                $q->where($column, '>=', $start);
+            } elseif ($end) {
+                $q->where($column, '<=', $end);
             }
         }
     }
@@ -700,7 +702,7 @@ new #[Layout('layouts.admin')] #[Title('Review Seller Application')] class exten
                                         </a>
                                     </td>
                                     <td class="py-3 px-4 text-zinc-500 whitespace-nowrap">
-                                        {{ $sOrder->placed_at->format('d M Y, h:i A') }}
+                                        @datetime($sOrder->placed_at)
                                     </td>
                                     <td class="py-3 px-4 text-zinc-700 dark:text-zinc-300">
                                         @if ($sOrder->order?->user?->isAnonymized())

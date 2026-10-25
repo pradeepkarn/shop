@@ -31,6 +31,16 @@ class OrderItemFeeSnapshotLookupService implements OrderItemFeeSnapshotLookupInt
         return $snapshots->map(fn (OrderItemFeeSnapshot $snap) => $this->mapSnapshotToDto($snap))->all();
     }
 
+    /**
+     * @return array<int, FeeBreakdownDto>
+     */
+    public function getInternalSnapshotsForSellerOrder(string $sellerOrderId): array
+    {
+        $snapshots = OrderItemFeeSnapshot::where('seller_order_id', $sellerOrderId)->get();
+
+        return $snapshots->map(fn (OrderItemFeeSnapshot $snap) => $this->mapSnapshotToDto($snap))->all();
+    }
+
     public function getSellerOrderFeeSummary(string $sellerOrderId, int $sellerProfileId): ?SellerOrderFeeSummaryDto
     {
         $dtos = $this->getSnapshotsForSellerOrder($sellerOrderId, $sellerProfileId);

@@ -18,6 +18,9 @@ use App\Orders\Enums\PaymentMethod;
 use App\Orders\Enums\PaymentStatus;
 use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Events\OrderPlaced;
+use App\Orders\Events\SellerOrderCancelled;
+use App\Orders\Events\SellerOrderDelivered;
+use App\Orders\Events\SellerOrderShipped;
 use App\Orders\Models\Order;
 use App\Orders\Models\OrderItem;
 use App\Orders\Models\OrderStatusHistory;
@@ -306,20 +309,26 @@ class OrderService
         SellerOrderStatus $newStatus,
         string $actorType,
         int $actorId,
-        ?string $reason = null
+        ?string $reason = null,
+        ?string $courierName = null,
+        ?string $trackingNumber = null,
     ): void {
         $oldStatus = $sellerOrder->status;
         if ($oldStatus === $newStatus) {
             return;
         }
 
-        DB::transaction(function () use ($sellerOrder, $oldStatus, $newStatus, $actorType, $actorId, $reason) {
+        DB::transaction(function () use ($sellerOrder, $oldStatus, $newStatus, $actorType, $actorId, $reason, $courierName, $trackingNumber) {
             $updates = ['status' => $newStatus];
 
             match ($newStatus) {
                 SellerOrderStatus::Confirmed => $updates['confirmed_at'] = now(),
                 SellerOrderStatus::Packed => $updates['packed_at'] = now(),
-                SellerOrderStatus::Shipped => $updates['shipped_at'] = now(),
+                SellerOrderStatus::Shipped => [
+                    $updates['shipped_at'] = now(),
+                    $updates['courier_name'] = $courierName,
+                    $updates['tracking_number'] = $trackingNumber,
+                ],
                 SellerOrderStatus::Delivered => $updates['delivered_at'] = now(),
                 SellerOrderStatus::Cancelled => [
                     $updates['cancelled_at'] = now(),
@@ -344,6 +353,38 @@ class OrderService
 
             // Update parent order status
             $this->updateParentOrderStatus($sellerOrder->order);
+
+            // Fire domain events after DB commit
+            DB::afterCommit(function () use ($sellerOrder, $newStatus, $actorType, $actorId, $reason) {
+                $profileId = (int) $sellerOrder->seller_profile_id;
+                $timestamp = now();
+
+                match ($newStatus) {
+                    SellerOrderStatus::Shipped => event(new SellerOrderShipped(
+                        sellerOrderId: (string) $sellerOrder->id,
+                        sellerProfileId: $profileId,
+                        timestamp: $timestamp,
+                        actorType: $actorType,
+                        actorId: $actorId,
+                    )),
+                    SellerOrderStatus::Delivered => event(new SellerOrderDelivered(
+                        sellerOrderId: (string) $sellerOrder->id,
+                        sellerProfileId: $profileId,
+                        timestamp: $timestamp,
+                        actorType: $actorType,
+                        actorId: $actorId,
+                    )),
+                    SellerOrderStatus::Cancelled => event(new SellerOrderCancelled(
+                        sellerOrderId: (string) $sellerOrder->id,
+                        sellerProfileId: $profileId,
+                        timestamp: $timestamp,
+                        actorType: $actorType,
+                        actorId: $actorId,
+                        reason: $reason,
+                    )),
+                    default => null,
+                };
+            });
         });
     }
 

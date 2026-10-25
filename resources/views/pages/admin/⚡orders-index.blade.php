@@ -5,6 +5,7 @@ namespace App\Livewire\Admin;
 use App\Models\SellerProfile;
 use App\Orders\Models\Order;
 use App\Support\AdminPermissions;
+use App\Support\DateFormatter;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -132,17 +133,22 @@ new #[Layout('layouts.admin')] #[Title('Orders Management')] class extends Compo
     protected function applyDateRange(Builder $q): void
     {
         if ($this->datePreset === 'today') {
-            $q->whereBetween('placed_at', [now()->startOfDay(), now()->endOfDay()]);
+            [$start, $end] = DateFormatter::todayRange();
+            $q->whereBetween('placed_at', [$start, $end]);
         } elseif ($this->datePreset === '7_days') {
-            $q->whereBetween('placed_at', [now()->subDays(7)->startOfDay(), now()->endOfDay()]);
+            [$start, $end] = DateFormatter::lastDaysRange(7);
+            $q->whereBetween('placed_at', [$start, $end]);
         } elseif ($this->datePreset === '30_days') {
-            $q->whereBetween('placed_at', [now()->subDays(30)->startOfDay(), now()->endOfDay()]);
+            [$start, $end] = DateFormatter::lastDaysRange(30);
+            $q->whereBetween('placed_at', [$start, $end]);
         } elseif ($this->datePreset === 'custom') {
-            if (filled($this->dateFrom)) {
-                $q->where('placed_at', '>=', Carbon::parse($this->dateFrom)->startOfDay());
-            }
-            if (filled($this->dateTo)) {
-                $q->where('placed_at', '<=', Carbon::parse($this->dateTo)->endOfDay());
+            [$start, $end] = DateFormatter::parseCustomRange($this->dateFrom, $this->dateTo);
+            if ($start && $end) {
+                $q->whereBetween('placed_at', [$start, $end]);
+            } elseif ($start) {
+                $q->where('placed_at', '>=', $start);
+            } elseif ($end) {
+                $q->where('placed_at', '<=', $end);
             }
         }
     }
@@ -454,7 +460,7 @@ new #[Layout('layouts.admin')] #[Title('Orders Management')] class extends Compo
                                     {{ $order->order_number }}
                                 </td>
                                 <td class="py-3 px-4 text-zinc-600 dark:text-zinc-400">
-                                    {{ $order->placed_at->format('d M Y, h:i A') }}
+                                    @datetime($order->placed_at)
                                 </td>
                                 <td class="py-3 px-4 text-zinc-700 dark:text-zinc-300">
                                     @if ($userAnonymized)

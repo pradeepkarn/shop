@@ -12,6 +12,8 @@ use App\Orders\Enums\PaymentMethod;
 use App\Orders\Enums\PaymentStatus;
 use App\Orders\Models\Order;
 use App\Shared\Enums\FeeScheduleStatus;
+use App\Shipping\Enums\ShipmentStatus;
+use App\Shipping\Models\Shipment;
 use App\Support\AdminPermissions;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -115,6 +117,24 @@ function getRouteParam(string $routeName): array
                 ]);
             })(),
         ],
+        'admin.shipments.show' => [
+            'shipment' => (function () {
+                return Shipment::create([
+                    'seller_order_id' => (string) Str::ulid(),
+                    'order_id' => (string) Str::ulid(),
+                    'seller_profile_id' => 1,
+                    'provider' => 'fake',
+                    'awb' => 'FAKE-1234567890',
+                    'status' => ShipmentStatus::Created,
+                    'actual_weight_grams' => 500,
+                    'volumetric_weight_grams' => 500,
+                    'chargeable_weight_grams' => 500,
+                    'length_cm' => 15,
+                    'width_cm' => 10,
+                    'height_cm' => 5,
+                ]);
+            })(),
+        ],
         default => [],
     };
 }
@@ -136,9 +156,15 @@ dataset('admin_protected_routes', [
     ['admin.fees.show', AdminPermissions::FEES_VIEW],
     ['admin.fees.create', AdminPermissions::FEES_MANAGE],
     ['admin.fees.edit', AdminPermissions::FEES_MANAGE],
+    ['admin.settlements.index', AdminPermissions::SETTLEMENTS_VIEW],
+    ['admin.settlements.reports', AdminPermissions::SETTLEMENTS_VIEW],
+    ['admin.payouts.index', AdminPermissions::PAYOUTS_VIEW],
     ['admin.staff', AdminPermissions::ADMINS_VIEW],
     ['admin.roles', AdminPermissions::ROLES_MANAGE],
     ['admin.activity-logs', AdminPermissions::AUDIT_VIEW],
+    ['admin.shipping.settings', AdminPermissions::SHIPPING_VIEW],
+    ['admin.shipments.index', AdminPermissions::SHIPPING_VIEW],
+    ['admin.shipments.show', AdminPermissions::SHIPPING_VIEW],
 ]);
 
 test('admin route returns 403 when staff lacks required permission and 200 when granted', function (string $routeName, string $permission) {

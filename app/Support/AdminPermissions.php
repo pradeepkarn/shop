@@ -50,6 +50,16 @@ class AdminPermissions
 
     public const FEES_MANAGE = 'fees.manage';
 
+    public const SETTLEMENTS_VIEW = 'settlements.view';
+
+    public const PAYOUTS_VIEW = 'payouts.view';
+
+    public const PAYOUTS_MANAGE = 'payouts.manage';
+
+    public const SHIPPING_VIEW = 'shipping.view';
+
+    public const SHIPPING_MANAGE = 'shipping.manage';
+
     /**
      * Get all registered permissions grouped by module.
      *
@@ -168,6 +178,31 @@ class AdminPermissions
                 self::FEES_MANAGE => [
                     'label' => 'Manage Fee Schedules',
                     'description' => 'Create draft schedules, edit slabs, clone, and activate fee schedules.',
+                ],
+            ],
+
+            'Settlements & Payouts' => [
+                self::SETTLEMENTS_VIEW => [
+                    'label' => 'View Settlements & Ledgers',
+                    'description' => 'Inspect seller order settlements, double-entry financial ledgers, and revenue reports.',
+                ],
+                self::PAYOUTS_VIEW => [
+                    'label' => 'View Payout Batches',
+                    'description' => 'Inspect weekly disbursement batches and seller payout records.',
+                ],
+                self::PAYOUTS_MANAGE => [
+                    'label' => 'Manage Payout Batches',
+                    'description' => 'Generate weekly disbursement batches, download bank CSVs, mark paid with UTR, and cancel batches.',
+                ],
+            ],
+            'Shipping & Logistics' => [
+                self::SHIPPING_VIEW => [
+                    'label' => 'View Shipments & Carrier Settings',
+                    'description' => 'View shipments across sellers, tracking events, and carrier configuration.',
+                ],
+                self::SHIPPING_MANAGE => [
+                    'label' => 'Manage Shipping & Carriers',
+                    'description' => 'Switch active carrier, test API connections, manage seller pickup registrations, and trigger NDR actions.',
                 ],
             ],
         ];

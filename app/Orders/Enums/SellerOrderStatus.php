@@ -9,6 +9,7 @@ enum SellerOrderStatus: string
     case Packed = 'packed';
     case Shipped = 'shipped';
     case Delivered = 'delivered';
+    case ReturnedToOrigin = 'rto';
     case Cancelled = 'cancelled';
 
     public function label(): string
@@ -19,6 +20,7 @@ enum SellerOrderStatus: string
             self::Packed => 'Packed',
             self::Shipped => 'Shipped',
             self::Delivered => 'Delivered',
+            self::ReturnedToOrigin => 'Returned to Origin',
             self::Cancelled => 'Cancelled',
         };
     }
@@ -41,5 +43,15 @@ enum SellerOrderStatus: string
     public function canPack(): bool
     {
         return $this === self::Confirmed;
+    }
+
+    public function canShip(): bool
+    {
+        return $this === self::Packed;
+    }
+
+    public function canDeliver(): bool
+    {
+        return $this === self::Shipped;
     }
 }

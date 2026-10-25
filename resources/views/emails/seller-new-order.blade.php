@@ -10,7 +10,7 @@
             New Order Received!
         </h1>
         <p style="font-size: 14px; color: #52525b; line-height: 1.5;">
-            You have received a new package for order <strong>#{{ $sellerOrder->order->order_number }}</strong>.
+            You have received a new package for order <strong>#{{ $sellerOrder->order->order_number }}</strong> placed on <strong>@datetime($sellerOrder->placed_at)</strong>.
         </p>
 
         <div style="background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px; padding: 16px; margin: 24px 0;">

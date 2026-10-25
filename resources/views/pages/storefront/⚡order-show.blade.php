@@ -113,7 +113,7 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                 Order {{ $order->order_number }}
             </h1>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                Placed on {{ $order->placed_at->format('d M Y, h:i A') }}
+                Placed on @datetime($order->placed_at)
             </p>
         </div>
         <div>
@@ -188,6 +188,47 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                     </div>
 
                     <!-- Items list -->
+                    @php
+                        $shipment = app(\App\Shipping\Contracts\ShipmentLookupInterface::class)->getShipmentForSellerOrder($sellerOrder->id);
+                    @endphp
+
+                    @if ($shipment)
+                        <div class="my-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-bold uppercase tracking-wider text-indigo-900 dark:text-indigo-300">Courier: {{ strtoupper($shipment->provider) }}</span>
+                                    <span class="text-zinc-300 dark:text-zinc-700">&bull;</span>
+                                    <span class="text-xs text-zinc-600 dark:text-zinc-400">AWB: <code class="font-mono font-bold">{{ $shipment->awb }}</code></span>
+                                </div>
+                                <span class="inline-flex items-center rounded-lg px-2.5 py-0.5 text-xs font-bold {{ $shipment->status->badgeClasses() }}">
+                                    {{ $shipment->status->label() }}
+                                </span>
+                            </div>
+
+                            @if ($shipment->publicTrackingUrl)
+                                <div class="mt-2">
+                                    <a href="{{ $shipment->publicTrackingUrl }}" target="_blank" class="text-xs font-bold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 underline inline-flex items-center gap-1">
+                                        Track delivery on {{ strtoupper($shipment->provider) }} &rarr;
+                                    </a>
+                                </div>
+                            @endif
+
+                            @if (! empty($shipment->events))
+                                <div class="mt-3 border-t border-indigo-100 dark:border-indigo-900/40 pt-2">
+                                    <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">Latest Tracking Update:</span>
+                                    @php $latestEvent = $shipment->events[0] ?? null; @endphp
+                                    @if ($latestEvent)
+                                        <p class="text-xs text-zinc-700 dark:text-zinc-300 mt-0.5">
+                                            <strong>{{ $latestEvent->providerStatus }}</strong>
+                                            @if ($latestEvent->location) &mdash; {{ $latestEvent->location }} @endif
+                                            <span class="text-[11px] text-zinc-400">(@datetime($latestEvent->occurredAt))</span>
+                                        </p>
+                                    @endif
+                                </div>
+                            @endif
+                        </div>
+                    @endif
+
                     <div class="divide-y divide-zinc-100 dark:divide-zinc-800">
                         @foreach ($sellerOrder->items as $item)
                             <div class="py-4 flex gap-4">
@@ -237,7 +278,7 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                             <ul class="mt-1 space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                                 @foreach ($sellerOrder->statusHistories as $log)
                                     <li>
-                                        &bull; {{ $log->created_at->format('d M, h:i A') }} — Status changed to <strong class="text-zinc-700 dark:text-zinc-300">{{ ucfirst($log->to_status) }}</strong>
+                                        &bull; @datetime($log->created_at) — Status changed to <strong class="text-zinc-700 dark:text-zinc-300">{{ ucfirst($log->to_status) }}</strong>
                                         @if ($log->reason)
                                             <span class="italic">({{ $log->reason }})</span>
                                         @endif

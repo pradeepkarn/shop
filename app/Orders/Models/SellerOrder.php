@@ -18,6 +18,8 @@ use Illuminate\Support\Carbon;
  * @property string $seller_store_name
  * @property string|null $seller_gstin
  * @property string|null $seller_pickup_state
+ * @property string|null $invoice_number
+ * @property Carbon|null $invoice_date
  * @property SellerOrderStatus $status
  * @property int $subtotal
  * @property int $discount_total
@@ -59,11 +61,15 @@ class SellerOrder extends Model
         'confirmed_at',
         'packed_at',
         'shipped_at',
+        'courier_name',
+        'tracking_number',
         'delivered_at',
         'cancelled_at',
         'cancellation_reason',
         'cancelled_by_type',
         'cancelled_by_id',
+        'invoice_number',
+        'invoice_date',
     ];
 
     /**
@@ -82,6 +88,7 @@ class SellerOrder extends Model
             'shipped_at' => 'datetime',
             'delivered_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'invoice_date' => 'date',
         ];
     }
 

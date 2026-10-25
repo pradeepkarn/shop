@@ -18,4 +18,11 @@ interface OrderItemFeeSnapshotLookupInterface
      * Get aggregate fee summary for a seller order package.
      */
     public function getSellerOrderFeeSummary(string $sellerOrderId, int $sellerProfileId): ?SellerOrderFeeSummaryDto;
+
+    /**
+     * Get item fee snapshots for a seller order without seller scoping (internal backend modules).
+     *
+     * @return array<int, FeeBreakdownDto>
+     */
+    public function getInternalSnapshotsForSellerOrder(string $sellerOrderId): array;
 }

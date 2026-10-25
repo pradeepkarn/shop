@@ -64,7 +64,7 @@ new #[Layout('layouts.app')] #[Title('My Orders')] class extends Component {
                             <span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Order</span>
                             <span class="ml-1 text-sm font-bold text-zinc-900 dark:text-white">{{ $order->order_number }}</span>
                             <span class="mx-2 text-zinc-300">&middot;</span>
-                            <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $order->placed_at->format('d M Y, h:i A') }}</span>
+                            <span class="text-xs text-zinc-500 dark:text-zinc-400">@datetime($order->placed_at)</span>
                         </div>
                         <div class="flex items-center gap-3">
                             <span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-bold uppercase {{ $order->status->value === 'cancelled' ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300' : ($order->status->value === 'completed' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200') }}">

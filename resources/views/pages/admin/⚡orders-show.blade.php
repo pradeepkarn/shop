@@ -2,7 +2,11 @@
 
 namespace App\Livewire\Admin;
 
+use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Models\Order;
+use App\Orders\Models\SellerOrder;
+use App\Orders\Services\OrderService;
+use App\Services\AdminActivityLogger;
 use App\Support\AdminPermissions;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Attributes\Layout;
@@ -79,6 +83,42 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
 
         return str_repeat('•', $maskedCount).$visibleDigits;
     }
+
+    public function markDelivered(string $sellerOrderId, OrderService $orderService): void
+    {
+        Gate::authorize(AdminPermissions::ORDERS_MANAGE);
+
+        $sellerOrder = SellerOrder::find($sellerOrderId);
+        if (! $sellerOrder) {
+            return;
+        }
+
+        try {
+            $orderService->transitionSellerOrderStatus(
+                $sellerOrder,
+                SellerOrderStatus::Delivered,
+                'admin',
+                auth('admin')->id(),
+                'Package marked as Delivered by admin'
+            );
+
+            AdminActivityLogger::log(
+                'orders.deliver',
+                $sellerOrder,
+                [
+                    'order_id' => $this->order->id,
+                    'order_number' => $this->order->order_number,
+                    'seller_order_id' => $sellerOrder->id,
+                    'seller_profile_id' => $sellerOrder->seller_profile_id,
+                ]
+            );
+
+            session()->flash('order_success', "Package for {$sellerOrder->seller_store_name} marked as Delivered.");
+            $this->mount($this->order);
+        } catch (\DomainException $e) {
+            session()->flash('order_error', $e->getMessage());
+        }
+    }
 }; ?>
 
 <div class="space-y-6">
@@ -90,6 +130,18 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
             <span>Back to Orders</span>
         </a>
     </div>
+
+    <!-- Alerts -->
+    @if (session()->has('order_error'))
+        <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-800 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-300">
+            {{ session('order_error') }}
+        </div>
+    @endif
+    @if (session()->has('order_success'))
+        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-semibold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/50 dark:text-emerald-300">
+            {{ session('order_success') }}
+        </div>
+    @endif
 
     <!-- Header Card -->
     <div class="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-center sm:justify-between">
@@ -103,7 +155,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                 </span>
             </div>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                Placed on {{ $order->placed_at->format('d M Y, h:i A') }} • Payment: {{ $order->payment_method->label() }} ({{ $order->payment_status->label() }})
+                Placed on @datetime($order->placed_at) • Payment: {{ $order->payment_method->label() }} ({{ $order->payment_status->label() }})
             </p>
         </div>
 
@@ -143,10 +195,27 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                             </div>
                         </div>
 
-                        <div class="flex items-center gap-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                            @if ($sellerOrder->courier_name || $sellerOrder->tracking_number)
+                                <div class="text-[11px] text-zinc-500 mr-2">
+                                    {{ $sellerOrder->courier_name }}: <span class="font-mono font-bold text-zinc-700 dark:text-zinc-300">{{ $sellerOrder->tracking_number }}</span>
+                                </div>
+                            @endif
                             <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold uppercase {{ $sellerOrder->status->value === 'cancelled' ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300' : ($sellerOrder->status->value === 'delivered' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300') }}">
                                 {{ $sellerOrder->status->label() }}
                             </span>
+                            @can(AdminPermissions::ORDERS_MANAGE)
+                                @if ($sellerOrder->status->canDeliver())
+                                    <button
+                                        type="button"
+                                        wire:click="markDelivered('{{ $sellerOrder->id }}')"
+                                        class="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-emerald-700 transition"
+                                        data-test="mark-delivered-button"
+                                    >
+                                        Mark Delivered
+                                    </button>
+                                @endif
+                            @endcan
                         </div>
                     </div>
 
@@ -247,7 +316,7 @@ new #[Layout('layouts.admin')] #[Title('Order Details')] class extends Component
                                         @if ($history->reason)
                                             <span class="text-zinc-500 italic">({{ $history->reason }})</span>
                                         @endif
-                                        <span class="ml-auto text-zinc-400">{{ $history->created_at->format('d M Y, h:i A') }}</span>
+                                        <span class="ml-auto text-zinc-400">@datetime($history->created_at)</span>
                                     </div>
                                 @endforeach
                             </div>

@@ -127,7 +127,7 @@ new #[Layout('layouts.seller')] #[Title('Orders')] class extends Component {
                                     {{ $sellerOrder->order->order_number ?? $sellerOrder->id }}
                                 </td>
                                 <td class="py-3 px-4 text-zinc-600 dark:text-zinc-400">
-                                    {{ $sellerOrder->placed_at->format('d M Y, h:i A') }}
+                                    @datetime($sellerOrder->placed_at)
                                 </td>
                                 <td class="py-3 px-4 text-zinc-700 dark:text-zinc-300">
                                     {{ $sellerOrder->items->count() }} {{ $sellerOrder->items->count() === 1 ? 'item' : 'items' }}

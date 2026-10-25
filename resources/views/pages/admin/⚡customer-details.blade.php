@@ -340,21 +340,21 @@ new #[Layout('layouts.admin')] #[Title('Customer Details')] class extends Compon
                     <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-4 dark:border-zinc-800/80 dark:bg-zinc-800/30">
                         <dt class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Email Verified At</dt>
                         <dd class="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">
-                            {{ $user->email_verified_at?->format('M j, Y H:i:s') ?? 'Not verified' }}
+                            {{ $user->email_verified_at ? format_datetime($user->email_verified_at) : 'Not verified' }}
                         </dd>
                     </div>
 
                     <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-4 dark:border-zinc-800/80 dark:bg-zinc-800/30">
                         <dt class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Registered On</dt>
                         <dd class="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">
-                            {{ $user->created_at?->format('M j, Y H:i:s') ?? '—' }}
+                            @datetime($user->created_at)
                         </dd>
                     </div>
 
                     <div class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-4 dark:border-zinc-800/80 dark:bg-zinc-800/30">
                         <dt class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Last Updated</dt>
                         <dd class="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">
-                            {{ $user->updated_at?->format('M j, Y H:i:s') ?? '—' }}
+                            @datetime($user->updated_at)
                         </dd>
                     </div>
                 </dl>
@@ -404,7 +404,7 @@ new #[Layout('layouts.admin')] #[Title('Customer Details')] class extends Compon
                     <div class="rounded-xl border border-zinc-200 bg-zinc-50/50 p-3.5 shadow-xs dark:border-zinc-800 dark:bg-zinc-800/30">
                         <span class="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block">Last Order</span>
                         <span class="text-xs font-bold text-zinc-900 dark:text-white mt-1.5 block" data-test="customer-summary-last-order">
-                            {{ $this->customerOrdersSummary['last_order_at']?->format('d M Y') ?? 'Never' }}
+                            {{ $this->customerOrdersSummary['last_order_at'] ? format_date($this->customerOrdersSummary['last_order_at']) : 'Never' }}
                         </span>
                     </div>
                 </div>
@@ -436,7 +436,7 @@ new #[Layout('layouts.admin')] #[Title('Customer Details')] class extends Compon
                                             </a>
                                         </td>
                                         <td class="py-3 px-4 text-zinc-500 whitespace-nowrap">
-                                            {{ $cOrder->placed_at->format('d M Y, h:i A') }}
+                                            @datetime($cOrder->placed_at)
                                         </td>
                                         <td class="py-3 px-4 text-zinc-700 dark:text-zinc-300">
                                             @php

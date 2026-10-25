@@ -52,6 +52,14 @@ final class Money
         return '₹'.number_format($this->toRupees(), 2);
     }
 
+    /**
+     * Alias for format().
+     */
+    public function getFormatted(): string
+    {
+        return $this->format();
+    }
+
     public function add(self ...$others): self
     {
         $total = $this->paise;

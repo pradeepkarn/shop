@@ -7,6 +7,8 @@ use App\Checkout\Services\CheckoutIntentService;
 use App\Models\CustomerAddress;
 use App\Orders\DTOs\PlaceOrderData;
 use App\Orders\Services\OrderService;
+use App\Shipping\Contracts\DeliveryServiceabilityLookupInterface;
+use App\Shipping\DTOs\CodValidationResultDto;
 use App\Support\CustomerAddressRules;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
@@ -111,6 +113,44 @@ new #[Layout('layouts.storefront')] class extends Component {
     public function addresses(): \Illuminate\Database\Eloquent\Collection
     {
         return auth()->user()->addresses()->latest()->get();
+    }
+
+    #[Computed]
+    public function codValidation(): CodValidationResultDto
+    {
+        if (! $this->selectedAddressId) {
+            return new CodValidationResultDto(isAvailable: true);
+        }
+
+        $addr = CustomerAddress::find($this->selectedAddressId);
+        if (! $addr || empty($addr->pincode)) {
+            return new CodValidationResultDto(isAvailable: true);
+        }
+
+        $eval = $this->evaluation;
+        $activeLines = $eval['active_lines'] ?? [];
+        if (empty($activeLines)) {
+            return new CodValidationResultDto(isAvailable: true);
+        }
+
+        $sellerPackages = [];
+        foreach ($activeLines as $line) {
+            $sellerId = (int) ($line['seller_profile_id'] ?? 0);
+            $sellerName = (string) ($line['seller_name'] ?? 'Seller');
+            $subtotal = (int) ($line['subtotal'] ?? 0);
+
+            if (! isset($sellerPackages[$sellerId])) {
+                $sellerPackages[$sellerId] = [
+                    'seller_profile_id' => $sellerId,
+                    'seller_store_name' => $sellerName,
+                    'cod_amount_paise' => 0,
+                    'delivery_pincode' => (string) $addr->pincode,
+                ];
+            }
+            $sellerPackages[$sellerId]['cod_amount_paise'] += $subtotal;
+        }
+
+        return app(DeliveryServiceabilityLookupInterface::class)->validatePackageCodLimits(array_values($sellerPackages));
     }
 
     public function selectAddress(int $addressId): void
@@ -222,6 +262,13 @@ new #[Layout('layouts.storefront')] class extends Component {
             $this->selectedAddressId = null;
             $this->currentStep = 2;
             session()->flash('checkout_error', 'Please select a delivery address before confirming your order.');
+
+            return;
+        }
+
+        $codCheck = $this->codValidation;
+        if (! $codCheck->isAvailable) {
+            session()->flash('checkout_error', 'Cash on Delivery is unavailable: '.$codCheck->reasonMessage());
 
             return;
         }
@@ -601,6 +648,9 @@ new #[Layout('layouts.storefront')] class extends Component {
             </div>
 
             <!-- Step 4: Payment Options (Cash on Delivery) -->
+            @php
+                $codStatus = $this->codValidation;
+            @endphp
             <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
                 <div class="flex items-center gap-3 mb-4">
                     <span class="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-white">
@@ -611,26 +661,49 @@ new #[Layout('layouts.storefront')] class extends Component {
                     </h2>
                 </div>
 
-                <div class="rounded-xl border border-amber-500 bg-amber-50/40 p-4 dark:border-amber-600/70 dark:bg-amber-950/20">
-                    <label class="flex items-center gap-3 cursor-pointer">
-                        <input type="radio" checked readonly class="h-4 w-4 text-amber-600 focus:ring-amber-500" />
-                        <div>
-                            <span class="font-bold text-sm text-zinc-900 dark:text-white">Cash on Delivery</span>
-                            <p class="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">Pay with cash or UPI to the delivery courier when your order arrives.</p>
-                        </div>
-                    </label>
-                </div>
+                @if ($codStatus->isAvailable)
+                    <div class="rounded-xl border border-amber-500 bg-amber-50/40 p-4 dark:border-amber-600/70 dark:bg-amber-950/20">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="radio" checked readonly class="h-4 w-4 text-amber-600 focus:ring-amber-500" />
+                            <div>
+                                <span class="font-bold text-sm text-zinc-900 dark:text-white">Cash on Delivery</span>
+                                <p class="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">Pay with cash or UPI to the delivery courier when your order arrives.</p>
+                            </div>
+                        </label>
+                    </div>
 
-                <div class="mt-6">
-                    <button
-                        type="button"
-                        wire:click="confirmOrder"
-                        wire:loading.attr="disabled"
-                        class="w-full sm:w-auto rounded-xl bg-orange-600 px-8 py-3.5 text-center text-sm font-bold uppercase tracking-wider text-white shadow-sm hover:bg-orange-700 active:scale-[0.99] transition flex items-center justify-center gap-2"
-                    >
-                        <span>CONFIRM ORDER (Cash on Delivery)</span>
-                    </button>
-                </div>
+                    <div class="mt-6">
+                        <button
+                            type="button"
+                            wire:click="confirmOrder"
+                            wire:loading.attr="disabled"
+                            class="w-full sm:w-auto rounded-xl bg-orange-600 px-8 py-3.5 text-center text-sm font-bold uppercase tracking-wider text-white shadow-sm hover:bg-orange-700 active:scale-[0.99] transition flex items-center justify-center gap-2"
+                        >
+                            <span>CONFIRM ORDER (Cash on Delivery)</span>
+                        </button>
+                    </div>
+                @else
+                    <div class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/30">
+                        <div class="flex items-start gap-3">
+                            <span class="text-red-600 font-bold">✕</span>
+                            <div>
+                                <h3 class="text-sm font-bold text-red-900 dark:text-red-300">Cash on Delivery Unavailable</h3>
+                                <p class="text-xs text-red-700 dark:text-red-400 mt-1">{{ $codStatus->reasonMessage() }}</p>
+                                <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-2">Please select another delivery address or reduce package quantity.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-6">
+                        <button
+                            type="button"
+                            disabled
+                            class="w-full sm:w-auto rounded-xl bg-zinc-300 dark:bg-zinc-800 px-8 py-3.5 text-center text-sm font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 cursor-not-allowed"
+                        >
+                            <span>COD Unavailable</span>
+                        </button>
+                    </div>
+                @endif
             </div>
         </div>
 
