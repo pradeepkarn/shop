@@ -8,7 +8,9 @@
             <!-- Desktop Sidebar -->
             <aside data-test="customer-sidebar" class="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 z-30">
                 <div class="flex h-16 shrink-0 items-center gap-3 px-6 border-b border-zinc-200 dark:border-zinc-800">
-                    <x-app-logo href="{{ route('dashboard') }}" wire:navigate />
+                    <a href="{{ route('dashboard') }}" wire:navigate class="flex items-center gap-2 font-bold tracking-tight text-zinc-900 dark:text-white">
+                        <x-brand.logo area="customer" />
+                    </a>
                 </div>
 
                 <div class="flex flex-1 flex-col justify-between overflow-y-auto px-4 py-6">
@@ -106,7 +108,9 @@
                      x-transition:leave-end="-translate-x-full"
                      class="relative flex w-full max-w-xs flex-1 flex-col bg-white pt-5 pb-4 dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800">
                     <div class="flex items-center justify-between px-6 pb-4 border-b border-zinc-200 dark:border-zinc-800">
-                        <x-app-logo href="{{ route('dashboard') }}" wire:navigate />
+                        <a href="{{ route('dashboard') }}" wire:navigate class="flex items-center gap-2 font-bold tracking-tight text-zinc-900 dark:text-white">
+                            <x-brand.logo area="customer" />
+                        </a>
                         <button type="button" @click="mobileMenuOpen = false" class="p-1 rounded-md text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-white cursor-pointer">
                             <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>

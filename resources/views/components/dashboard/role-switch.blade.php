@@ -23,8 +23,8 @@
             $mobileLabel = 'Sell';
             $switchRoute = route('seller.apply');
         } elseif (! $isApproved) {
-            $switchLabel = 'Seller Center';
-            $mobileLabel = 'Seller Center';
+            $switchLabel = brand_name('seller');
+            $mobileLabel = brand_name('seller');
             $switchRoute = route('seller.apply');
         } else {
             $switchLabel = 'Switch to seller';

@@ -5,10 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <title>{{ filled($title ?? null) ? $title.' - Seller - '.config('app.name', 'Laravel') : 'Seller Dashboard - '.config('app.name', 'Laravel') }}</title>
+    <title>{{ filled($title ?? null) ? $title.' - '.brand_name('seller') : 'Dashboard - '.brand_name('seller') }}</title>
 
-    <link rel="icon" href="/favicon.ico" sizes="any">
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <x-brand.favicon />
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @include('partials.theme-script')
@@ -27,12 +26,7 @@
         <aside data-test="seller-sidebar" class="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 z-30">
             <div class="flex h-16 shrink-0 items-center gap-3 px-6 border-b border-zinc-200 dark:border-zinc-800">
                 <a href="{{ $isApproved ? route('seller.dashboard') : route('seller.apply') }}" wire:navigate class="flex items-center gap-2 font-bold text-lg text-zinc-900 dark:text-white truncate">
-                    @if ($sellerProfile?->logoUrl())
-                        <img src="{{ $sellerProfile->logoUrl() }}" alt="Logo" class="size-8 rounded-lg object-cover" />
-                    @else
-                        <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white font-black text-sm">S</span>
-                    @endif
-                    <span class="truncate">{{ $sellerProfile?->store_name ?? 'Seller Center' }}</span>
+                    <x-brand.logo area="seller" />
                 </a>
             </div>
 
@@ -193,9 +187,9 @@
                  x-transition:leave-end="-translate-x-full"
                  class="relative flex w-full max-w-xs flex-1 flex-col bg-white pt-5 pb-4 dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800">
                 <div class="flex items-center justify-between px-6 pb-4 border-b border-zinc-200 dark:border-zinc-800">
-                    <span class="font-bold text-lg text-zinc-900 dark:text-white truncate">
-                        {{ $sellerProfile?->store_name ?? 'Seller Center' }}
-                    </span>
+                    <a href="{{ $isApproved ? route('seller.dashboard') : route('seller.apply') }}" @click="mobileMenuOpen = false" wire:navigate class="flex items-center gap-2 font-bold text-lg text-zinc-900 dark:text-white truncate">
+                        <x-brand.logo area="seller" />
+                    </a>
                     <button type="button" @click="mobileMenuOpen = false" class="p-1 rounded-md text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-white">
                         <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
@@ -343,7 +337,7 @@
         <!-- Main Content Area -->
         <div class="flex flex-1 flex-col md:pl-64 min-w-0">
             <!-- Top Bar -->
-            <x-dashboard.topbar :title="$title ?? 'Seller Center'" role="seller" guard="web" />
+            <x-dashboard.topbar :title="$title ?? brand_name('seller')" role="seller" guard="web" />
 
             <!-- Main Body -->
             <main class="flex-1 p-4 md:p-8 max-w-7xl w-full mx-auto">
