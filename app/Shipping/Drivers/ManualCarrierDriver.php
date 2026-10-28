@@ -97,7 +97,6 @@ class ManualCarrierDriver implements ShippingCarrierInterface
             providerStatus: 'Manual In Transit',
             location: 'Local Hub',
             description: 'Package in manual transit',
-            occurredAt: now(),
         );
     }
 }

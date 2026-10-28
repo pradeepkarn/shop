@@ -11,6 +11,7 @@ use App\Settlements\Contracts\SettlementServiceInterface;
 use App\Shipping\Contracts\ShipmentServiceInterface;
 use App\Shipping\Enums\ShipmentStatus;
 use App\Shipping\Models\Shipment;
+use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -211,17 +212,24 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
 
         try {
-            $settlementService->confirmLostShipmentSettlement($shipmentModel->seller_order_id, auth()->id());
-            $claimService->recordClaim(
-                shipmentId: $shipmentModel->id,
-                sellerOrderId: $shipmentModel->seller_order_id,
-                carrierName: $shipmentModel->provider,
-                claimType: 'lost_shipment',
-                claimAmountPaise: $shipmentModel->insured_amount_paise ?: 100000,
-                bearer: 'platform',
-                adminId: auth()->id(),
-                notes: 'Shipment confirmed lost by administration (Platform bears loss)',
-            );
+            // Courier claim is raised for the declared value snapshotted when the shipment was created
+            if ($shipmentModel->declared_value_paise === null) {
+                throw new \DomainException('No declared value was recorded for this shipment, so the courier claim amount is unknown.');
+            }
+
+            DB::transaction(function () use ($settlementService, $claimService, $shipmentModel) {
+                $settlementService->confirmLostShipmentSettlement($shipmentModel->seller_order_id, auth()->id());
+                $claimService->recordClaim(
+                    shipmentId: $shipmentModel->id,
+                    sellerOrderId: $shipmentModel->seller_order_id,
+                    carrierName: $shipmentModel->provider,
+                    claimType: 'lost_shipment',
+                    claimAmountPaise: $shipmentModel->declared_value_paise,
+                    bearer: 'platform',
+                    adminId: auth()->id(),
+                    notes: 'Shipment confirmed lost by administration (Platform bears loss)',
+                );
+            });
 
             AdminActivityLogger::log('shipping.lost_confirmed', $shipmentModel);
             session()->flash('shipment_success', 'Shipment confirmed lost. Seller settlement continues as delivered, courier claim recorded against platform.');
@@ -249,15 +257,18 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             $delivered = array_map('intval', $this->selectedDeliveredItems);
             $undelivered = array_values(array_diff($allItemIds, $delivered));
 
-            $shipmentService->markPartialDelivery(
-                $shipmentModel->id,
-                $delivered,
-                $undelivered,
-                auth()->id(),
-                $this->partialNotes
-            );
+            // Resolution and hold release commit together, or neither does
+            DB::transaction(function () use ($shipmentService, $settlementService, $shipmentModel, $delivered, $undelivered) {
+                $shipmentService->resolvePartialDelivery(
+                    $shipmentModel->id,
+                    $delivered,
+                    $undelivered,
+                    auth()->id(),
+                    $this->partialNotes
+                );
 
-            $settlementService->releasePartialDeliveryHold($shipmentModel->seller_order_id);
+                $settlementService->releasePartialDeliveryHold($shipmentModel->seller_order_id);
+            });
 
             AdminActivityLogger::log('shipping.partial_delivery_marked', $shipmentModel, [
                 'delivered' => $delivered,
@@ -267,7 +278,8 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             session()->flash('shipment_success', 'Partial delivery marked and settlement hold released.');
             unset($this->shipment);
         } catch (\Throwable $e) {
-            session()->flash('shipment_error', 'Partial delivery marking failed: '.$e->getMessage());
+            report($e);
+            session()->flash('shipment_error', 'Could not confirm delivered items. Nothing was changed and the settlement hold is still in place. Reason: '.$e->getMessage());
         }
     }
 }; ?>
@@ -490,7 +502,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     @endif
 
     {{-- Partial Delivery Item Review Card --}}
-    @if ($shipmentModel->status === ShipmentStatus::PartialDelivered && $orderModel)
+    @if ($shipmentModel->status === ShipmentStatus::PartialDelivered && $orderModel && empty($shipmentModel->partial_delivery_data['resolved_at']))
         <div data-test="partial-delivery-card" class="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-6 shadow-xs dark:border-indigo-900/50 dark:bg-indigo-950/30 space-y-4">
             <div>
                 <h3 class="text-sm font-bold text-indigo-900 dark:text-indigo-200">

@@ -721,7 +721,7 @@ class ShiprocketCarrierDriver implements ShippingCarrierInterface
         $activities = $trackingData['shipment_track_activities'] ?? [];
         $latestActivity = $activities[0] ?? null;
         $description = $latestActivity['activity'] ?? $rawStatusString;
-        $occurredAt = ! empty($latestActivity['date']) ? Carbon::parse($latestActivity['date']) : now();
+        $occurredAt = ! empty($latestActivity['date']) ? Carbon::parse($latestActivity['date']) : null;
 
         $status = $this->mapShiprocketStatus($numericStatusCode, $rawStatusString);
 

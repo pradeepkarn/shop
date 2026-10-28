@@ -39,6 +39,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $height_cm
  * @property bool $is_cod
  * @property int $cod_amount_paise
+ * @property int|null $declared_value_paise
  * @property string|null $label_path
  * @property string|null $manifest_path
  * @property Carbon|null $label_generated_at
@@ -92,6 +93,7 @@ class Shipment extends Model
         'height_cm',
         'is_cod',
         'cod_amount_paise',
+        'declared_value_paise',
         'label_path',
         'manifest_path',
         'label_generated_at',
@@ -127,6 +129,7 @@ class Shipment extends Model
             'height_cm' => 'integer',
             'is_cod' => 'boolean',
             'cod_amount_paise' => 'integer',
+            'declared_value_paise' => 'integer',
             'estimated_carrier_charges_paise' => 'integer',
             'actual_carrier_charges_paise' => 'integer',
             'carrier_tat_min_days' => 'integer',

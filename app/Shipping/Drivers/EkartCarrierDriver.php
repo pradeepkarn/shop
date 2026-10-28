@@ -514,7 +514,7 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         $location = $track['location'] ?? null;
         $description = $track['desc'] ?? null;
 
-        $occurredAt = ! empty($track['ctime']) ? Carbon::createFromTimestampMs($track['ctime']) : now();
+        $occurredAt = ! empty($track['ctime']) ? Carbon::createFromTimestampMs($track['ctime']) : null;
         $edd = ! empty($data['edd']) ? Carbon::createFromTimestampMs($data['edd']) : null;
         $pickedUpAt = ! empty($track['pickupTime']) ? Carbon::createFromTimestampMs($track['pickupTime']) : null;
 

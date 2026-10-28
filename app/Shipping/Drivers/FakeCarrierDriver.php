@@ -213,6 +213,7 @@ class FakeCarrierDriver implements ShippingCarrierInterface
             occurredAt: now(),
             pickedUpAt: in_array($status, [ShipmentStatus::PickedUp, ShipmentStatus::InTransit, ShipmentStatus::OutForDelivery, ShipmentStatus::Delivered], true) ? now() : null,
             providerNdrStatus: $status === ShipmentStatus::DeliveryFailed ? ($reason ?? 'Delivery Attempt Failed') : null,
+            providerEventId: 'SIM-'.Str::ulid(),
         );
 
         $this->trackingMap[$awb] = $dto;
@@ -228,7 +229,6 @@ class FakeCarrierDriver implements ShippingCarrierInterface
             providerStatus: 'In Transit',
             location: 'Hub',
             description: 'In Transit',
-            occurredAt: now(),
         );
     }
 }

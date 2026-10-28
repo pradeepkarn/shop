@@ -188,9 +188,13 @@ class SellerLedgerService implements SellerLedgerServiceInterface
     {
         $now = CarbonImmutable::now();
 
-        DB::transaction(function () use ($settlement, $now) {
+        $rtoShippingSourceKey = "settlement:{$settlement->seller_order_id}:rto_shipping";
+
+        DB::transaction(function () use ($settlement, $now, $rtoShippingSourceKey) {
+            // Exclude the RTO debit itself so a re-run neither reverses it nor counts it as forward shipping
             $existingEntries = SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
                 ->where('type', '!=', LedgerEntryType::Reversal->value)
+                ->where('source_key', '!=', $rtoShippingSourceKey)
                 ->get();
 
             $forwardShippingPaise = 0;
@@ -231,7 +235,7 @@ class SellerLedgerService implements SellerLedgerServiceInterface
                     'type' => LedgerEntryType::ShippingFee,
                     'amount' => -$rtoShippingPaise,
                     'description' => "RTO return shipping fee for order {$settlement->seller_order_id} (multiplier: {$multiplier})",
-                    'source_key' => "settlement:{$settlement->seller_order_id}:rto_shipping",
+                    'source_key' => $rtoShippingSourceKey,
                     'created_at' => $now,
                 ]);
             }

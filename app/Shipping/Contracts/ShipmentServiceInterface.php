@@ -70,16 +70,17 @@ interface ShipmentServiceInterface
     ): ShipmentEvent;
 
     /**
-     * Admin marks delivered items vs undelivered items for a partial delivery exception.
+     * Admin confirms which items were delivered on a shipment the courier marked Partially Delivered.
+     * Recorded as its own partial_delivery_resolved event; it is not a courier event.
      *
      * @param  array<int>  $deliveredItemIds
      * @param  array<int>  $undeliveredItemIds
      */
-    public function markPartialDelivery(
+    public function resolvePartialDelivery(
         string $shipmentId,
         array $deliveredItemIds,
         array $undeliveredItemIds,
         int $adminId,
         ?string $notes = null
-    ): void;
+    ): ShipmentEvent;
 }

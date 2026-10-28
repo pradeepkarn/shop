@@ -102,7 +102,7 @@ test('when shipment is lost platform absorbs loss and seller settlement continue
         'provider' => 'fake',
         'status' => ShipmentStatus::Lost,
         'awb' => 'SIM-LOST-111',
-        'insured_amount_paise' => 200000,
+        'declared_value_paise' => 200000,
         'actual_weight_grams' => 500,
         'volumetric_weight_grams' => 500,
         'chargeable_weight_grams' => 500,
