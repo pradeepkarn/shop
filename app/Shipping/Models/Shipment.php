@@ -2,6 +2,8 @@
 
 namespace App\Shipping\Models;
 
+use App\Shipping\Enums\ShipmentDirection;
+use App\Shipping\Enums\ShipmentPurpose;
 use App\Shipping\Enums\ShipmentStatus;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
@@ -14,6 +16,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $seller_order_id
  * @property string $order_id
  * @property int $seller_profile_id
+ * @property ShipmentDirection $direction
+ * @property ShipmentPurpose $purpose
+ * @property string|null $parent_shipment_id
  * @property string $provider
  * @property string|null $courier_name
  * @property string|null $awb
@@ -22,6 +27,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $provider_shipment_id
  * @property int $fulfillment_attempt
  * @property string $creation_step
+ * @property string $booking_status
+ * @property string|null $booking_error
+ * @property string|null $return_reason
  * @property string|null $public_tracking_url
  * @property ShipmentStatus $status
  * @property int $ndr_attempt_count
@@ -56,6 +64,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read Collection<int, ShipmentEvent> $events
+ * @property-read Collection<int, ShipmentItem> $items
  */
 class Shipment extends Model
 {
@@ -63,11 +72,28 @@ class Shipment extends Model
 
     protected $table = 'shipments';
 
+    protected $attributes = [
+        'direction' => 'forward',
+        'purpose' => 'original',
+        'booking_status' => self::BOOKING_BOOKED,
+    ];
+
+    public const BOOKING_PENDING = 'pending';
+
+    public const BOOKING_IN_PROGRESS = 'in_progress';
+
+    public const BOOKING_BOOKED = 'booked';
+
+    public const BOOKING_FAILED = 'failed';
+
     protected $fillable = [
         'id',
         'seller_order_id',
         'order_id',
         'seller_profile_id',
+        'direction',
+        'purpose',
+        'parent_shipment_id',
         'provider',
         'courier_name',
         'awb',
@@ -76,6 +102,9 @@ class Shipment extends Model
         'provider_shipment_id',
         'fulfillment_attempt',
         'creation_step',
+        'booking_status',
+        'booking_error',
+        'return_reason',
         'public_tracking_url',
         'status',
         'ndr_attempt_count',
@@ -116,6 +145,8 @@ class Shipment extends Model
     {
         return [
             'seller_profile_id' => 'integer',
+            'direction' => ShipmentDirection::class,
+            'purpose' => ShipmentPurpose::class,
             'fulfillment_attempt' => 'integer',
             'status' => ShipmentStatus::class,
             'ndr_attempt_count' => 'integer',
@@ -150,5 +181,47 @@ class Shipment extends Model
     public function events(): HasMany
     {
         return $this->hasMany(ShipmentEvent::class, 'shipment_id')->orderBy('occurred_at', 'desc');
+    }
+
+    /**
+     * Items carried by this shipment; empty means the whole seller order (original forward shipments).
+     *
+     * @return HasMany<ShipmentItem, $this>
+     */
+    public function items(): HasMany
+    {
+        return $this->hasMany(ShipmentItem::class, 'shipment_id');
+    }
+
+    public function isBooked(): bool
+    {
+        return $this->booking_status === self::BOOKING_BOOKED;
+    }
+
+    public function isReverse(): bool
+    {
+        return $this->direction === ShipmentDirection::Reverse;
+    }
+
+    public function statusLabel(): string
+    {
+        return $this->status->labelFor($this->direction);
+    }
+
+    /**
+     * Valid next courier statuses for this shipment's direction (simulation offers and enforces these).
+     *
+     * @return list<ShipmentStatus>
+     */
+    public function nextCourierStatuses(): array
+    {
+        $next = $this->status->nextStatusesFor($this->direction);
+
+        // A reship already carries only the undelivered units; it is delivered, returned or lost as a whole
+        if ($this->purpose === ShipmentPurpose::Reship) {
+            $next = array_values(array_filter($next, fn (ShipmentStatus $s) => $s !== ShipmentStatus::PartialDelivered));
+        }
+
+        return $next;
     }
 }

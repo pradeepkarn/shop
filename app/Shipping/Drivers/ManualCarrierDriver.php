@@ -12,6 +12,7 @@ use App\Shipping\DTOs\SellerWarehouseRegistrationDto;
 use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
+use App\Shipping\Models\Shipment;
 use Illuminate\Support\Str;
 
 class ManualCarrierDriver implements ShippingCarrierInterface
@@ -64,6 +65,19 @@ class ManualCarrierDriver implements ShippingCarrierInterface
             publicTrackingUrl: null,
             estimatedChargesPaise: 0,
         );
+    }
+
+    public function createReverseShipment(
+        CreateShipmentRequestDto $request,
+        SellerOrderShippingDetailsDto $details,
+        SellerOrderInvoiceDto $invoice,
+        string $returnReason,
+        ?Shipment $shipment = null,
+    ): CreateShipmentResponseDto {
+        // Manual carrier: staff arrange the pickup themselves; we only issue a reference
+        $awb = 'MAN-RVP-'.strtoupper(Str::random(10));
+
+        return new CreateShipmentResponseDto(success: true, awb: $awb, vendorWbn: $awb, publicTrackingUrl: null, estimatedChargesPaise: 0);
     }
 
     public function downloadLabel(string $awb): string

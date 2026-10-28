@@ -3,6 +3,7 @@
 namespace App\Settlements\Services;
 
 use App\Fees\Contracts\OrderItemFeeSnapshotLookupInterface;
+use App\Orders\Contracts\SellerOrderReturnWindowLookupInterface;
 use App\Orders\Contracts\SellerOrderStatusLookupInterface;
 use App\Settlements\Contracts\SellerLedgerServiceInterface;
 use App\Settlements\Contracts\SettlementServiceInterface;
@@ -14,6 +15,7 @@ use App\Settlements\Events\SettlementEligible;
 use App\Settlements\Models\SellerLedgerEntry;
 use App\Settlements\Models\SellerOrderSettlement;
 use Carbon\CarbonImmutable;
+use DomainException;
 use Illuminate\Support\Facades\DB;
 
 class SettlementService implements SettlementServiceInterface
@@ -22,11 +24,12 @@ class SettlementService implements SettlementServiceInterface
         protected SellerOrderStatusLookupInterface $orderStatusLookup,
         protected OrderItemFeeSnapshotLookupInterface $feeSnapshotLookup,
         protected SellerLedgerServiceInterface $ledgerService,
+        protected SellerOrderReturnWindowLookupInterface $returnWindowLookup,
     ) {}
 
     public function createSettlementForSellerOrder(string $sellerOrderId): ?SellerOrderSettlement
     {
-        $existing = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        $existing = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
         if ($existing) {
             return $existing;
         }
@@ -60,6 +63,7 @@ class SettlementService implements SettlementServiceInterface
             $holdUntil = null;
         } elseif ($statusDto->status === 'delivered') {
             $status = SettlementStatus::OnHold;
+            $returnWindowDays = $this->returnWindowLookup->returnWindowDays($sellerOrderId);
             // App time (UTC): hold_until is stored as wall-clock, so an IST-zoned value would land 5.5 hours late
             $deliveredBase = $statusDto->deliveredAt
                 ? CarbonImmutable::instance($statusDto->deliveredAt)->setTimezone(config('app.timezone'))
@@ -117,7 +121,7 @@ class SettlementService implements SettlementServiceInterface
 
     public function markSettlementOnHold(string $sellerOrderId, ?CarbonImmutable $deliveredAt = null): ?SellerOrderSettlement
     {
-        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
         if (! $settlement) {
             return null;
         }
@@ -131,11 +135,13 @@ class SettlementService implements SettlementServiceInterface
         if ($settlement->status === SettlementStatus::Pending) {
             // App time, like the delivered path: an IST-zoned instant would be stored as IST wall-clock (+5:30)
             $deliveredBase = $deliveredAt ?? CarbonImmutable::now();
-            $holdUntil = $deliveredBase->addDays($settlement->return_window_days);
+            // Hold for the longest return window among the package's items (per vertical); the window used is stored
+            $returnWindowDays = $this->returnWindowLookup->returnWindowDays($sellerOrderId);
 
             $settlement->update([
                 'status' => SettlementStatus::OnHold,
-                'hold_until' => $holdUntil,
+                'return_window_days' => $returnWindowDays,
+                'hold_until' => $deliveredBase->addDays($returnWindowDays),
             ]);
         }
 
@@ -144,7 +150,7 @@ class SettlementService implements SettlementServiceInterface
 
     public function voidSettlement(string $sellerOrderId): ?SellerOrderSettlement
     {
-        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
         if (! $settlement) {
             return null;
         }
@@ -167,7 +173,7 @@ class SettlementService implements SettlementServiceInterface
 
     public function processRtoSettlement(string $sellerOrderId): ?SellerOrderSettlement
     {
-        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
         if (! $settlement) {
             return null;
         }
@@ -198,7 +204,7 @@ class SettlementService implements SettlementServiceInterface
 
     public function confirmLostShipmentSettlement(string $sellerOrderId, int $adminId, ?string $notes = null): ?SellerOrderSettlement
     {
-        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
         if (! $settlement) {
             return null;
         }
@@ -213,7 +219,7 @@ class SettlementService implements SettlementServiceInterface
 
     public function releasePartialDeliveryHold(string $sellerOrderId, array $undeliveredOrderItemIds = []): ?SellerOrderSettlement
     {
-        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
         if (! $settlement) {
             return null;
         }
@@ -236,6 +242,223 @@ class SettlementService implements SettlementServiceInterface
         });
     }
 
+    public function startReshipSettlement(string $sellerOrderId, string $reshipShipmentId, array $lines): SellerOrderSettlement
+    {
+        return DB::transaction(function () use ($sellerOrderId, $reshipShipmentId, $lines) {
+            /** @var SellerOrderSettlement|null $order */
+            $order = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+            if (! $order) {
+                throw new DomainException("Seller order {$sellerOrderId} has no settlement to reship against.");
+            }
+
+            /** @var SellerOrderSettlement $reship */
+            $reship = SellerOrderSettlement::firstOrCreate(
+                ['seller_order_id' => $sellerOrderId, 'kind' => SellerOrderSettlement::KIND_RESHIP, 'reference_id' => $reshipShipmentId],
+                [
+                    'order_id' => $order->order_id,
+                    'seller_profile_id' => $order->seller_profile_id,
+                    'status' => SettlementStatus::Pending,
+                    'gross_amount' => 0,
+                    'total_deductions' => 0,
+                    'net_payout' => 0,
+                    'claimable_credits' => 0,
+                    // Reshipped units are held for the window saved when the package was first delivered
+                    'return_window_days' => $order->return_window_days,
+                ]
+            );
+
+            $charge = $this->ledgerService->recordReshipShippingCharge(
+                $reship,
+                $lines,
+                (float) config('returns.reship_shipping_multiplier', 1.0),
+            );
+
+            $reship->update(['total_deductions' => $charge, 'net_payout' => -$charge]);
+
+            return $reship->fresh();
+        });
+    }
+
+    public function completeReshipSettlement(string $reshipShipmentId, array $lines, CarbonImmutable $deliveredAt): ?SellerOrderSettlement
+    {
+        return DB::transaction(function () use ($reshipShipmentId, $lines, $deliveredAt) {
+            /** @var SellerOrderSettlement|null $reship */
+            $reship = SellerOrderSettlement::forReship($reshipShipmentId)->lockForUpdate()->first();
+            if (! $reship || $reship->status !== SettlementStatus::Pending) {
+                return $reship;
+            }
+
+            $credits = $this->ledgerService->recordReshipCredits($reship, $lines);
+            $net = $reship->net_payout + $credits['net'];
+
+            $reship->update([
+                'gross_amount' => $credits['sale'],
+                'net_payout' => $net,
+                'total_deductions' => $credits['sale'] - $net,
+                'status' => SettlementStatus::OnHold,
+                'hold_until' => $deliveredAt->addDays($reship->return_window_days),
+            ]);
+
+            return $reship->fresh();
+        });
+    }
+
+    public function returnReshipSettlement(string $reshipShipmentId): ?SellerOrderSettlement
+    {
+        return DB::transaction(function () use ($reshipShipmentId) {
+            /** @var SellerOrderSettlement|null $reship */
+            $reship = SellerOrderSettlement::forReship($reshipShipmentId)->lockForUpdate()->first();
+            if (! $reship || $reship->status !== SettlementStatus::Pending) {
+                return $reship;
+            }
+
+            $rto = $this->ledgerService->recordReshipRtoCharge($reship, (float) config('returns.rto_shipping_multiplier', 1.0));
+
+            // Never Void with charges outstanding: eligible and negative, carried into the next payout
+            $reship->update([
+                'total_deductions' => $reship->total_deductions + $rto,
+                'net_payout' => $reship->net_payout - $rto,
+                'status' => SettlementStatus::Eligible,
+                'hold_until' => null,
+            ]);
+
+            return $reship->fresh();
+        });
+    }
+
+    public function cancelReshipSettlement(string $reshipShipmentId): ?SellerOrderSettlement
+    {
+        return DB::transaction(function () use ($reshipShipmentId) {
+            /** @var SellerOrderSettlement|null $reship */
+            $reship = SellerOrderSettlement::forReship($reshipShipmentId)->lockForUpdate()->first();
+            if (! $reship || $reship->status !== SettlementStatus::Pending) {
+                return $reship;
+            }
+
+            $reversed = $this->ledgerService->reverseReshipShippingCharge($reship);
+
+            $reship->update([
+                'total_deductions' => max(0, $reship->total_deductions - $reversed),
+                'net_payout' => $reship->net_payout + $reversed,
+                'status' => SettlementStatus::Void,
+            ]);
+
+            return $reship->fresh();
+        });
+    }
+
+    public function placeReturnHold(string $sellerOrderId): void
+    {
+        SellerOrderSettlement::forSellerOrder($sellerOrderId)->update(['is_return_hold' => true]);
+    }
+
+    public function releaseReturnHold(string $sellerOrderId): void
+    {
+        SellerOrderSettlement::forSellerOrder($sellerOrderId)->update(['is_return_hold' => false]);
+    }
+
+    public function savedReturnWindowDays(string $sellerOrderId): ?int
+    {
+        /** @var SellerOrderSettlement|null $settlement */
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+
+        // Pending/void settlements were never put on hold at delivery, so no window was saved
+        if (! $settlement || in_array($settlement->status, [SettlementStatus::Pending, SettlementStatus::Void], true)) {
+            return null;
+        }
+
+        return $settlement->return_window_days;
+    }
+
+    public function reverseUnitsForReturnClaim(string $sellerOrderId, string $returnRequestId, array $lines): int
+    {
+        return DB::transaction(function () use ($sellerOrderId, $returnRequestId, $lines) {
+            /** @var SellerOrderSettlement|null $order */
+            $order = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+            if (! $order) {
+                throw new DomainException("Seller order {$sellerOrderId} has no settlement to reverse against.");
+            }
+
+            /** @var SellerOrderSettlement $claim */
+            $claim = SellerOrderSettlement::firstOrCreate(
+                ['seller_order_id' => $sellerOrderId, 'kind' => SellerOrderSettlement::KIND_RETURN, 'reference_id' => $returnRequestId],
+                [
+                    'order_id' => $order->order_id,
+                    'seller_profile_id' => $order->seller_profile_id,
+                    'status' => SettlementStatus::Eligible,
+                    'gross_amount' => 0,
+                    'total_deductions' => 0,
+                    'net_payout' => 0,
+                    'claimable_credits' => 0,
+                    'return_window_days' => $order->return_window_days,
+                ]
+            );
+
+            $debit = $this->ledgerService->recordUnitReversals($claim, $lines, "return:{$returnRequestId}");
+
+            $claim->update(['total_deductions' => $debit, 'net_payout' => -$debit]);
+
+            return $debit;
+        });
+    }
+
+    public function settleReturn(string $sellerOrderId, string $returnRequestId, array $lines, array $instructions): int
+    {
+        return DB::transaction(function () use ($sellerOrderId, $returnRequestId, $lines, $instructions) {
+            /** @var SellerOrderSettlement|null $order */
+            $order = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+            if (! $order) {
+                throw new DomainException("Seller order {$sellerOrderId} has no settlement to settle the return against.");
+            }
+
+            /** @var SellerOrderSettlement $settlement */
+            $settlement = SellerOrderSettlement::firstOrCreate(
+                ['seller_order_id' => $sellerOrderId, 'kind' => SellerOrderSettlement::KIND_RETURN, 'reference_id' => $returnRequestId],
+                [
+                    'order_id' => $order->order_id,
+                    'seller_profile_id' => $order->seller_profile_id,
+                    'status' => SettlementStatus::Eligible,
+                    'gross_amount' => 0,
+                    'total_deductions' => 0,
+                    'net_payout' => 0,
+                    'claimable_credits' => 0,
+                    'return_window_days' => $order->return_window_days,
+                ]
+            );
+
+            $unitLines = array_map(fn (array $line) => ['units' => $line['units'], 'line_qty' => $line['line_qty']], $lines);
+            $debit = 0;
+
+            if ($instructions['reverse_sale']) {
+                [$refunded, $refundable] = $instructions['refund_ratio'];
+                foreach ($lines as $orderItemId => $line) {
+                    $debit += $this->ledgerService->recordUnitReversals(
+                        $settlement,
+                        [$orderItemId => $unitLines[$orderItemId]],
+                        "return:{$line['return_item_id']}",
+                        $instructions['reverse_fees'],
+                        $refunded,
+                        $refundable,
+                    );
+                }
+            }
+
+            foreach ($instructions['shipping'] as $charge => $multiplier) {
+                $debit += $this->ledgerService->recordAllocatedShippingCharge(
+                    $settlement,
+                    $unitLines,
+                    "return:{$returnRequestId}:{$charge}:",
+                    (float) $multiplier,
+                    ucfirst(str_replace('_', ' ', $charge))." for returned units (multiplier {$multiplier})",
+                );
+            }
+
+            $settlement->update(['total_deductions' => $debit, 'net_payout' => -$debit, 'status' => SettlementStatus::Eligible]);
+
+            return $debit;
+        });
+    }
+
     public function releaseMaturedSettlements(): int
     {
         // hold_until is stored in app time (UTC); an IST-zoned "now" would be bound as IST wall-clock
@@ -244,6 +467,7 @@ class SettlementService implements SettlementServiceInterface
 
         $matured = SellerOrderSettlement::where('status', SettlementStatus::OnHold)
             ->where('is_partial_delivery_hold', false)
+            ->where('is_return_hold', false)
             ->where('hold_until', '<=', $now)
             ->get();
 
@@ -293,7 +517,7 @@ class SettlementService implements SettlementServiceInterface
 
     public function getSettlementBySellerOrderId(string $sellerOrderId): ?SellerOrderSettlement
     {
-        return SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        return SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
     }
 
     public function getSettlementSummary(SellerOrderSettlement $settlement): SettlementSummaryDto

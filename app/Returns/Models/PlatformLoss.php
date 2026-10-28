@@ -25,6 +25,11 @@ class PlatformLoss extends Model
 
     public const TYPE_LOST_SHIPMENT = 'lost_shipment';
 
+    public const TYPE_LOST_RETURN = 'lost_return';
+
+    /** Refund given after a failed return check without blaming the seller. */
+    public const TYPE_GOODWILL_REFUND = 'goodwill_refund';
+
     protected $table = 'platform_losses';
 
     protected $fillable = [

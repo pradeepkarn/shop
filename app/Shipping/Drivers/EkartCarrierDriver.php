@@ -12,6 +12,7 @@ use App\Shipping\DTOs\SellerWarehouseRegistrationDto;
 use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
+use App\Shipping\Models\Shipment;
 use Carbon\Carbon;
 use Carbon\CarbonImmutable;
 use DomainException;
@@ -264,6 +265,32 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         SellerOrderShippingDetailsDto $details,
         SellerOrderInvoiceDto $invoice,
     ): CreateShipmentResponseDto {
+        return $this->createPackage($request, $details, $invoice, null);
+    }
+
+    /**
+     * Reverse shipment per docs/carriers/ekart/spec.yaml "Reverse Shipments": same package create call with
+     * payment_mode Pickup and a return_reason. drop_location stays the customer and pickup_location the seller
+     * (semantically opposite on the ground). QC (qc_shipment) only when shipping.ekart.reverse_qc is enabled.
+     */
+    public function createReverseShipment(
+        CreateShipmentRequestDto $request,
+        SellerOrderShippingDetailsDto $details,
+        SellerOrderInvoiceDto $invoice,
+        string $returnReason,
+        ?Shipment $shipment = null,
+    ): CreateShipmentResponseDto {
+        return $this->createPackage($request, $details, $invoice, $returnReason !== '' ? $returnReason : 'Customer return');
+    }
+
+    protected function createPackage(
+        CreateShipmentRequestDto $request,
+        SellerOrderShippingDetailsDto $details,
+        SellerOrderInvoiceDto $invoice,
+        ?string $returnReason,
+    ): CreateShipmentResponseDto {
+        $isReverse = $returnReason !== null;
+
         if ($this->safeMode) {
             throw new DomainException('Shipping safe mode is active. Live shipment creation is blocked.');
         }
@@ -281,7 +308,7 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         }
         $taxableAmountInr = max(1, round($totalAmountInr - $taxValueInr, 2));
 
-        $codAmountInr = $details->isCod ? min(49999, round($details->codAmountPaise / 100, 2)) : 0;
+        $codAmountInr = ! $isReverse && $details->isCod ? min(49999, round($details->codAmountPaise / 100, 2)) : 0;
         $alias = $request->pickupLocationAlias ?: ('WH-'.$details->sellerProfileId);
 
         $customerPhone = preg_replace('/\D/', '', $details->customerPhone);
@@ -301,7 +328,7 @@ class EkartCarrierDriver implements ShippingCarrierInterface
             'invoice_date' => $invoice->invoiceDate->format('Y-m-d'),
             'consignee_name' => substr($details->customerName, 0, 100),
             'consignee_alternate_phone' => substr($altPhone, -10),
-            'payment_mode' => $details->isCod ? 'COD' : 'Prepaid',
+            'payment_mode' => $isReverse ? 'Pickup' : ($details->isCod ? 'COD' : 'Prepaid'),
             'category_of_goods' => 'Toys & Games',
             'products_desc' => substr(implode(', ', $itemsSummary), 0, 150),
             'total_amount' => max(1, $totalAmountInr),
@@ -309,7 +336,7 @@ class EkartCarrierDriver implements ShippingCarrierInterface
             'taxable_amount' => max(1, $taxableAmountInr),
             'commodity_value' => (string) max(1, $taxableAmountInr),
             'tax_value' => $taxValueInr,
-            'return_reason' => '',
+            'return_reason' => $returnReason ?? '',
             'quantity' => max(1, $totalQty),
             'weight' => max(50, $request->actualWeightGrams),
             'length' => max(1, $request->lengthCm),
@@ -334,6 +361,11 @@ class EkartCarrierDriver implements ShippingCarrierInterface
                 'name' => $alias,
             ],
         ];
+
+        if ($isReverse && config('shipping.ekart.reverse_qc', false)) {
+            $payload['qc_shipment'] = true;
+            $payload['product_name'] = substr($details->items[0]->title ?? 'Returned item', 0, 100);
+        }
 
         if (! $request->delayedDispatch && ! empty($request->preferredDispatchDate)) {
             $payload['preferred_dispatch_date'] = $request->preferredDispatchDate;

@@ -152,8 +152,9 @@ test('admin can simulate every fake milestone and events are recorded identicall
 });
 
 test('fake simulation is disabled unless SHIPPING_FAKE_SIMULATION_ENABLED is set', function () {
-    // phpunit.xml and .env do not set the flag, so this is the shipped default
-    expect(config('shipping.fake_simulation_enabled'))->toBeFalse();
+    // Check the shipped default itself, independent of a developer's local .env
+    expect(file_get_contents(config_path('shipping.php')))
+        ->toContain("'fake_simulation_enabled' => (bool) env('SHIPPING_FAKE_SIMULATION_ENABLED', false)");
 });
 
 test('the toolbar offers only valid next statuses for the current status', function () {

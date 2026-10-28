@@ -608,7 +608,40 @@ test('staff without returns.view do not see rto reports or courier claims on the
 test('returns permissions are registered and synced to the admin guard', function () {
     $this->artisan('permissions:sync')->assertSuccessful();
 
-    expect(AdminPermissions::all())->toContain(AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE)
-        ->and(Permission::where('guard_name', 'admin')->whereIn('name', [AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE])->count())->toBe(2)
+    expect(AdminPermissions::all())->toContain(AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE, AdminPermissions::REFUNDS_MANAGE)
+        ->and(Permission::where('guard_name', 'admin')->whereIn('name', [AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE, AdminPermissions::REFUNDS_MANAGE])->count())->toBe(3)
+        ->and(Role::findByName('Super Admin', 'admin')->hasPermissionTo(AdminPermissions::REFUNDS_MANAGE))->toBeTrue()
         ->and(Role::findByName('Super Admin', 'admin')->hasPermissionTo(AdminPermissions::RETURNS_MANAGE))->toBeTrue();
+});
+
+test('staff without refunds.manage cannot record refund payouts or failures', function (string $method) {
+    $staff = Admin::factory()->create();
+    $role = Role::findOrCreate('Returns Manager No Refunds', 'admin');
+    $role->syncPermissions([AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE]);
+    $staff->assignRole($role);
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.refunds-index')
+        ->call($method, (string) Str::ulid())
+        ->assertForbidden();
+})->with(['markRefundPaid', 'markRefundFailed']);
+
+test('view-only shipping staff cannot retry a courier booking', function () {
+    $staff = Admin::factory()->create();
+    $staff->assignRole(Role::findOrCreate('Shipping Viewer Booking', 'admin')->syncPermissions([AdminPermissions::SHIPPING_VIEW]));
+
+    $shipment = Shipment::create([
+        'seller_order_id' => (string) Str::ulid(), 'order_id' => (string) Str::ulid(), 'seller_profile_id' => 1,
+        'provider' => 'fake', 'status' => ShipmentStatus::Created, 'booking_status' => Shipment::BOOKING_FAILED,
+        'actual_weight_grams' => 500, 'volumetric_weight_grams' => 500, 'chargeable_weight_grams' => 500,
+        'length_cm' => 15, 'width_cm' => 10, 'height_cm' => 5,
+    ]);
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->assertDontSee('data-test="retry-booking-btn"', false)
+        ->call('retryBooking')
+        ->assertForbidden();
+
+    expect($shipment->fresh()->booking_status)->toBe(Shipment::BOOKING_FAILED);
 });

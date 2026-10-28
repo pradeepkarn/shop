@@ -572,6 +572,48 @@ class OrderService implements OrderRestockInterface
         }
     }
 
+    public function reserveStockForReship(int $orderItemId, int $units): void
+    {
+        /** @var OrderItem $item */
+        $item = OrderItem::findOrFail($orderItemId);
+
+        // Conditional decrement: only an active listing with enough stock is touched (safe against concurrent sales)
+        $taken = $item->listing_id
+            ? Listing::where('id', $item->listing_id)
+                ->where('status', ListingStatus::Active->value)
+                ->where('stock', '>=', $units)
+                ->decrement('stock', $units)
+            : 0;
+
+        if ($taken === 0) {
+            throw new DomainException("{$item->title} is out of stock or its listing is not active; refund the customer instead.");
+        }
+
+        $this->refreshBuyBoxForListing($item->listing_id);
+    }
+
+    public function restockOrderItemUnits(int $orderItemId, int $units): void
+    {
+        /** @var OrderItem $item */
+        $item = OrderItem::findOrFail($orderItemId);
+
+        if (! $item->listing_id || $units <= 0) {
+            return;
+        }
+
+        Listing::where('id', $item->listing_id)->increment('stock', $units);
+        $this->refreshBuyBoxForListing($item->listing_id);
+    }
+
+    protected function refreshBuyBoxForListing(int $listingId): void
+    {
+        /** @var Listing|null $listing */
+        $listing = Listing::with('variant')->find($listingId);
+        if ($listing?->variant?->product_id) {
+            app(ProductBuyBoxService::class)->refresh($listing->variant->product_id);
+        }
+    }
+
     /**
      * Update parent Order status based on all child seller orders.
      */
@@ -588,7 +630,16 @@ class OrderService implements OrderRestockInterface
         $anyCancelled = $sellerOrders->contains(fn (SellerOrder $so) => $so->status->isClosedUndelivered());
         $allDelivered = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isDeliveredToCustomer());
 
-        if ($allCancelled) {
+        // Returns: every package fully refunded, or some refunded with the rest finished (delivered or closed)
+        $allRefunded = $sellerOrders->every(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Refunded);
+        $anyRefunded = $sellerOrders->contains(fn (SellerOrder $so) => $so->status->isRefunded());
+        $allFinished = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isRefunded() || $so->status->isDeliveredToCustomer() || $so->status->isClosedUndelivered());
+
+        if ($allRefunded) {
+            $order->status = OrderStatus::Refunded;
+        } elseif ($anyRefunded && $allFinished) {
+            $order->status = OrderStatus::PartiallyRefunded;
+        } elseif ($allCancelled) {
             $order->status = OrderStatus::Cancelled;
             match ($order->payment_method) {
                 PaymentMethod::CashOnDelivery => $order->payment_status = PaymentStatus::Cancelled,

@@ -4,6 +4,7 @@ namespace App\Shipping\DTOs;
 
 namespace App\Shipping\Contracts;
 
+use App\Shipping\DTOs\ShipmentSummaryDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
 use App\Shipping\Models\Shipment;
@@ -26,7 +27,37 @@ interface ShipmentServiceInterface
     ): Shipment;
 
     /**
-     * Cancel an active shipment. Reverts seller order to Packed.
+     * Reship undelivered units: a forward shipment (purpose reship, parent = the original shipment) carrying only those
+     * units and collecting $codAmountPaise. Database only (safe inside a transaction); call bookShipment() after commit.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function createReshipBooking(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto;
+
+    /**
+     * Ship returned units back to the customer (QC failed): forward, purpose ship_back, nothing collected.
+     * Database only; call bookShipment() after commit.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function createShipBackBooking(string $sellerOrderId, array $units, int $declaredValuePaise): ShipmentSummaryDto;
+
+    /**
+     * Return pickup of units from the customer (the order's delivery address) to the seller. Database only; call
+     * bookShipment() after commit.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function createReturnPickupBooking(string $sellerOrderId, array $units, int $declaredValuePaise, string $returnReason): ShipmentSummaryDto;
+
+    /**
+     * Book a pending (or retry a failed) shipment with its courier. Never call inside a DB transaction: no locks are
+     * held during the courier call. On failure the shipment stays booking_failed with the error, ready to retry.
+     */
+    public function bookShipment(string $shipmentId): ShipmentSummaryDto;
+
+    /**
+     * Cancel an active shipment. Reverts seller order to Packed (a cancelled reship only reports the cancellation).
      */
     public function cancelShipment(
         string $shipmentId,

@@ -8,6 +8,7 @@ use App\Orders\DTOs\SellerOrderInvoiceDto;
 use App\Orders\Enums\PaymentMethod;
 use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Events\SellerOrderPartialDelivered;
+use App\Orders\Models\CustomerRefundItem;
 use App\Orders\Models\OrderStatusHistory;
 use App\Orders\Models\SellerInvoiceSequence;
 use App\Orders\Models\SellerOrder;
@@ -222,7 +223,7 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
         string $sellerOrderId,
         array $deliveredItemIds,
         array $undeliveredItemIds,
-    ): void {
+    ): array {
         /** @var SellerOrder $sellerOrder */
         $sellerOrder = SellerOrder::with(['items', 'order'])->findOrFail($sellerOrderId);
 
@@ -247,7 +248,7 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
         if ($undelivered === []) {
             $this->markDelivered($sellerOrderId);
 
-            return;
+            return [];
         }
 
         // COD is collected only for the delivered items, net of their coupon discount
@@ -266,6 +267,61 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
             actorId: 0,
             reason: count($delivered).' item(s) delivered, '.count($undelivered).' not delivered',
         );
+
+        // Whole lines are undelivered: every unit of each line
+        return $sellerOrder->items
+            ->whereIn('id', $undelivered)
+            ->mapWithKeys(fn ($item) => [(int) $item->id => ['units' => (int) $item->qty, 'line_qty' => (int) $item->qty]])
+            ->all();
+    }
+
+    public function recordReturnRefund(string $sellerOrderId): void
+    {
+        DB::transaction(function () use ($sellerOrderId) {
+            /** @var SellerOrder $sellerOrder */
+            $sellerOrder = SellerOrder::with('items')->lockForUpdate()->findOrFail($sellerOrderId);
+
+            $allowed = [SellerOrderStatus::Delivered, SellerOrderStatus::PartiallyDelivered, SellerOrderStatus::PartiallyRefunded];
+            if (! in_array($sellerOrder->status, $allowed, true)) {
+                return;
+            }
+
+            $totalUnits = (int) $sellerOrder->items->sum('qty');
+            $refundedUnits = (int) CustomerRefundItem::whereIn('order_item_id', $sellerOrder->items->pluck('id'))->sum('units');
+            if ($refundedUnits === 0) {
+                return;
+            }
+
+            $this->orderService->transitionSellerOrderStatus(
+                sellerOrder: $sellerOrder,
+                newStatus: $refundedUnits >= $totalUnits ? SellerOrderStatus::Refunded : SellerOrderStatus::PartiallyRefunded,
+                actorType: 'returns_service',
+                actorId: 0,
+                reason: "{$refundedUnits} of {$totalUnits} unit(s) refunded after return",
+            );
+        });
+    }
+
+    public function recordReshipDelivered(string $sellerOrderId, int $codCollectedPaise, bool $allItemsDelivered): void
+    {
+        DB::transaction(function () use ($sellerOrderId, $codCollectedPaise, $allItemsDelivered) {
+            /** @var SellerOrder $sellerOrder */
+            $sellerOrder = SellerOrder::lockForUpdate()->findOrFail($sellerOrderId);
+
+            if ($codCollectedPaise > 0 && $sellerOrder->expected_cod_amount_paise !== null) {
+                $sellerOrder->update(['expected_cod_amount_paise' => $sellerOrder->expected_cod_amount_paise + $codCollectedPaise]);
+            }
+
+            if ($allItemsDelivered && $sellerOrder->status === SellerOrderStatus::PartiallyDelivered) {
+                $this->orderService->transitionSellerOrderStatus(
+                    sellerOrder: $sellerOrder,
+                    newStatus: SellerOrderStatus::Delivered,
+                    actorType: 'returns_service',
+                    actorId: 0,
+                    reason: 'Remaining items delivered by reship',
+                );
+            }
+        });
     }
 
     public function markPartialDelivered(

@@ -12,6 +12,7 @@ use App\Shipping\DTOs\SellerWarehouseRegistrationDto;
 use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
+use App\Shipping\Models\Shipment;
 use Illuminate\Support\Str;
 
 class FakeCarrierDriver implements ShippingCarrierInterface
@@ -72,6 +73,28 @@ class FakeCarrierDriver implements ShippingCarrierInterface
                 'country' => 'India',
             ],
         ];
+    }
+
+    public function createReverseShipment(
+        CreateShipmentRequestDto $request,
+        SellerOrderShippingDetailsDto $details,
+        SellerOrderInvoiceDto $invoice,
+        string $returnReason,
+        ?Shipment $shipment = null,
+    ): CreateShipmentResponseDto {
+        if ($this->shouldFailCreation) {
+            return new CreateShipmentResponseDto(
+                success: false,
+                awb: null,
+                vendorWbn: null,
+                publicTrackingUrl: null,
+                errorMessage: 'Simulated fake return pickup booking failure',
+            );
+        }
+
+        $awb = 'SIM-RVP-'.strtoupper(Str::random(10));
+
+        return new CreateShipmentResponseDto(success: true, awb: $awb, vendorWbn: $awb, publicTrackingUrl: null, estimatedChargesPaise: 0);
     }
 
     public function createShipment(
