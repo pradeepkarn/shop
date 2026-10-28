@@ -13,6 +13,7 @@ use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
 use Carbon\Carbon;
+use Carbon\CarbonImmutable;
 use DomainException;
 use Exception;
 use Illuminate\Http\Client\PendingRequest;
@@ -429,36 +430,40 @@ class EkartCarrierDriver implements ShippingCarrierInterface
     public function requestNdrAction(string $awb, string $action, array $payload = []): array
     {
         $normalized = strtolower(trim($action));
-        $ekartAction = ($normalized === 'rto' || $normalized === 'return') ? 'RTO' : 'Re-Attempt';
+        $ekartAction = match ($normalized) {
+            'reattempt', 're-attempt' => 'Re-Attempt',
+            'rto', 'return' => 'RTO',
+            default => null,
+        };
 
+        if ($ekartAction === null) {
+            return ['success' => false, 'message' => "Unsupported NDR action for Ekart: {$action}"];
+        }
+
+        // Body per docs/carriers/ekart/spec.yaml, POST /api/v2/package/ndr, schema ndr_data_v2
         $body = [
             'action' => $ekartAction,
             'wbn' => $awb,
         ];
 
         if ($ekartAction === 'Re-Attempt') {
-            // date in ms within 7 days of current day, excluding today
-            $dateMs = null;
-            if (! empty($payload['date']) && is_numeric($payload['date'])) {
-                $dateMs = (int) $payload['date'];
-            } elseif (! empty($payload['days_ahead']) && is_numeric($payload['days_ahead'])) {
-                $days = min(7, max(1, (int) $payload['days_ahead']));
-                $dateMs = (int) now()->addDays($days)->startOfDay()->timestamp * 1000;
-            } else {
-                $dateMs = (int) now()->addDays(1)->startOfDay()->timestamp * 1000;
+            try {
+                $body['date'] = $this->reattemptDateMs((string) ($payload['reattempt_date'] ?? ''));
+            } catch (DomainException $e) {
+                return ['success' => false, 'message' => $e->getMessage()];
             }
-            $body['date'] = $dateMs;
-        }
 
-        if (! empty($payload['phone'])) {
-            $digits = preg_replace('/\D/', '', (string) $payload['phone']);
-            if (strlen($digits) === 10) {
-                $body['phone'] = $digits;
+            if (! empty($payload['phone'])) {
+                $phone = (string) $payload['phone'];
+                if (! preg_match('/^\d{10}$/', $phone)) {
+                    return ['success' => false, 'message' => 'Ekart requires the updated phone to be exactly 10 digits.'];
+                }
+                $body['phone'] = $phone;
             }
-        }
 
-        if (! empty($payload['address'])) {
-            $body['address'] = (string) $payload['address'];
+            if (! empty($payload['address'])) {
+                $body['address'] = (string) $payload['address'];
+            }
         }
 
         if (! empty($payload['instructions'])) {
@@ -497,6 +502,28 @@ class EkartCarrierDriver implements ShippingCarrierInterface
                 'message' => 'Ekart NDR exception: '.$e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Ekart ndr_data_v2.date: re-attempt date in ms since epoch, within seven days of the
+     * current day, excluding today. Days are counted in the business timezone (IST).
+     */
+    protected function reattemptDateMs(string $date): int
+    {
+        $timezone = (string) config('app.display_timezone', 'Asia/Kolkata');
+
+        if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            throw new DomainException('Ekart re-attempt needs a date (YYYY-MM-DD) between tomorrow and 7 days from today.');
+        }
+
+        $day = CarbonImmutable::createFromFormat('!Y-m-d', $date, $timezone);
+        $today = CarbonImmutable::now($timezone)->startOfDay();
+
+        if (! $day || $day->format('Y-m-d') !== $date || $day->lte($today) || $day->gt($today->addDays(7))) {
+            throw new DomainException("Ekart re-attempt date must be between {$today->addDay()->format('d M Y')} and {$today->addDays(7)->format('d M Y')} (today is not allowed).");
+        }
+
+        return $day->getTimestamp() * 1000;
     }
 
     public function track(string $awb): TrackingStatusDto

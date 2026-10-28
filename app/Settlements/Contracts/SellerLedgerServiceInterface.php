@@ -27,6 +27,15 @@ interface SellerLedgerServiceInterface
     public function recordRtoReversalsForSettlement(SellerOrderSettlement $settlement): void;
 
     /**
+     * Partial delivery: reverse sale and fees for the undelivered items; their allocated forward shipping is kept
+     * (the whole package was shipped). Idempotent. Returns the sale and net amounts reversed by this call.
+     *
+     * @param  array<int>  $undeliveredOrderItemIds
+     * @return array{sale: int, net: int}
+     */
+    public function recordPartialDeliveryReversals(SellerOrderSettlement $settlement, array $undeliveredOrderItemIds): array;
+
+    /**
      * Compute current balances for a seller.
      */
     public function getSellerBalance(int $sellerId): SellerBalanceDto;

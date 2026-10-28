@@ -65,6 +65,10 @@ interface ShippingCarrierInterface
     /**
      * Request an NDR action ('reattempt' or 'rto') for an undelivered shipment.
      *
+     * $action is "reattempt" or "rto". $payload keys (all optional, already validated by ShipmentService):
+     * phone (10 digits), address, reattempt_date (Y-m-d, business timezone), instructions.
+     * Phone, address and date are only sent for a re-attempt.
+     *
      * @param  array<string, mixed>  $payload
      * @return array{success: bool, message: string}
      */

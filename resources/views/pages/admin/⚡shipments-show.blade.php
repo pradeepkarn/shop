@@ -3,15 +3,13 @@
 namespace App\Livewire\Admin;
 
 use App\Orders\Models\SellerOrder;
-use App\Returns\Contracts\CourierClaimServiceInterface;
 use App\Returns\Contracts\ReturnsLookupInterface;
 use App\Returns\Contracts\RtoIntakeServiceInterface;
+use App\Returns\Contracts\ShipmentExceptionServiceInterface;
 use App\Services\AdminActivityLogger;
-use App\Settlements\Contracts\SettlementServiceInterface;
 use App\Shipping\Contracts\ShipmentServiceInterface;
 use App\Shipping\Enums\ShipmentStatus;
 use App\Shipping\Models\Shipment;
-use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
@@ -27,6 +25,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     public string $ndrAction = 'reattempt';
     public string $ndrPhone = '';
     public string $ndrAddress = '';
+    public string $ndrInstructions = '';
     public string $ndrDate = '';
 
     // RTO decision fields
@@ -40,6 +39,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     {
         $this->authorize('shipping.view');
         $this->shipmentId = $shipment;
+        $this->ndrDate = now(config('app.display_timezone', 'Asia/Kolkata'))->addDay()->format('Y-m-d');
 
         if (! $this->shipment) {
             abort(404, 'Shipment not found.');
@@ -150,7 +150,8 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             $result = $shipmentService->actionNdr($shipmentModel->id, $this->ndrAction, [
                 'phone' => $this->ndrPhone,
                 'address' => $this->ndrAddress,
-                'deferred_date' => $this->ndrDate,
+                'instructions' => $this->ndrInstructions,
+                'reattempt_date' => $this->ndrDate,
             ]);
 
             AdminActivityLogger::log('shipping.ndr_actioned', $shipmentModel, [
@@ -198,13 +199,10 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
     }
 
-    public function confirmLostShipment(
-        ?SettlementServiceInterface $settlementService = null,
-        ?CourierClaimServiceInterface $claimService = null
-    ): void {
+    public function confirmLostShipment(?ShipmentExceptionServiceInterface $exceptionService = null): void
+    {
         $this->authorize('shipping.manage');
-        $settlementService = $settlementService ?: app(SettlementServiceInterface::class);
-        $claimService = $claimService ?: app(CourierClaimServiceInterface::class);
+        $exceptionService = $exceptionService ?: app(ShipmentExceptionServiceInterface::class);
 
         $shipmentModel = $this->shipment;
         if (! $shipmentModel) {
@@ -212,24 +210,22 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
 
         try {
+            if ($shipmentModel->status !== ShipmentStatus::Lost) {
+                throw new \DomainException('Only a shipment the courier reported as Lost can be confirmed lost.');
+            }
+
             // Courier claim is raised for the declared value snapshotted when the shipment was created
             if ($shipmentModel->declared_value_paise === null) {
                 throw new \DomainException('No declared value was recorded for this shipment, so the courier claim amount is unknown.');
             }
 
-            DB::transaction(function () use ($settlementService, $claimService, $shipmentModel) {
-                $settlementService->confirmLostShipmentSettlement($shipmentModel->seller_order_id, auth()->id());
-                $claimService->recordClaim(
-                    shipmentId: $shipmentModel->id,
-                    sellerOrderId: $shipmentModel->seller_order_id,
-                    carrierName: $shipmentModel->provider,
-                    claimType: 'lost_shipment',
-                    claimAmountPaise: $shipmentModel->declared_value_paise,
-                    bearer: 'platform',
-                    adminId: auth()->id(),
-                    notes: 'Shipment confirmed lost by administration (Platform bears loss)',
-                );
-            });
+            $exceptionService->confirmLostShipment(
+                shipmentId: $shipmentModel->id,
+                sellerOrderId: $shipmentModel->seller_order_id,
+                carrierName: $shipmentModel->provider,
+                declaredValuePaise: $shipmentModel->declared_value_paise,
+                adminId: auth()->id(),
+            );
 
             AdminActivityLogger::log('shipping.lost_confirmed', $shipmentModel);
             session()->flash('shipment_success', 'Shipment confirmed lost. Seller settlement continues as delivered, courier claim recorded against platform.');
@@ -239,13 +235,10 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
     }
 
-    public function submitPartialDelivery(
-        ?ShipmentServiceInterface $shipmentService = null,
-        ?SettlementServiceInterface $settlementService = null
-    ): void {
+    public function submitPartialDelivery(?ShipmentExceptionServiceInterface $exceptionService = null): void
+    {
         $this->authorize('shipping.manage');
-        $shipmentService = $shipmentService ?: app(ShipmentServiceInterface::class);
-        $settlementService = $settlementService ?: app(SettlementServiceInterface::class);
+        $exceptionService = $exceptionService ?: app(ShipmentExceptionServiceInterface::class);
 
         $shipmentModel = $this->shipment;
         if (! $shipmentModel || ! $this->sellerOrder) {
@@ -257,18 +250,15 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             $delivered = array_map('intval', $this->selectedDeliveredItems);
             $undelivered = array_values(array_diff($allItemIds, $delivered));
 
-            // Resolution and hold release commit together, or neither does
-            DB::transaction(function () use ($shipmentService, $settlementService, $shipmentModel, $delivered, $undelivered) {
-                $shipmentService->resolvePartialDelivery(
-                    $shipmentModel->id,
-                    $delivered,
-                    $undelivered,
-                    auth()->id(),
-                    $this->partialNotes
-                );
-
-                $settlementService->releasePartialDeliveryHold($shipmentModel->seller_order_id);
-            });
+            // Resolution, hold release and undelivered-item records commit together, or none do
+            $exceptionService->resolvePartialDelivery(
+                shipmentId: $shipmentModel->id,
+                sellerOrderId: $shipmentModel->seller_order_id,
+                deliveredItemIds: $delivered,
+                undeliveredItemIds: $undelivered,
+                adminId: auth()->id(),
+                notes: $this->partialNotes,
+            );
 
             AdminActivityLogger::log('shipping.partial_delivery_marked', $shipmentModel, [
                 'delivered' => $delivered,
@@ -439,7 +429,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
 
             @can('shipping.manage')
                 <div class="pt-3 border-t border-amber-200/60 dark:border-amber-900/40">
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                         <div>
                             <label class="block text-xs font-bold text-amber-900 dark:text-amber-200">Action</label>
                             <select wire:model="ndrAction" class="mt-1 w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white">
@@ -454,8 +444,18 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                         </div>
 
                         <div>
-                            <label class="block text-xs font-bold text-amber-900 dark:text-amber-200">Updated Instructions / Address</label>
-                            <input wire:model="ndrAddress" type="text" placeholder="Delivery instructions" class="mt-1 w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white" />
+                            <label class="block text-xs font-bold text-amber-900 dark:text-amber-200">Re-Attempt Date</label>
+                            <input wire:model="ndrDate" type="date" data-test="ndr-date" class="mt-1 w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white" />
+                        </div>
+
+                        <div class="md:col-span-2">
+                            <label class="block text-xs font-bold text-amber-900 dark:text-amber-200">Updated Address for this Shipment (Optional)</label>
+                            <input wire:model="ndrAddress" type="text" placeholder="Only this delivery; the customer's saved address is not changed" class="mt-1 w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white" />
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-amber-900 dark:text-amber-200">Instructions for Courier (Optional)</label>
+                            <input wire:model="ndrInstructions" type="text" placeholder="e.g. Call before delivery" class="mt-1 w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white" />
                         </div>
 
                         <div>

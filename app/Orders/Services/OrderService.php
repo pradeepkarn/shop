@@ -416,7 +416,7 @@ class OrderService implements OrderRestockInterface
                     $updates['courier_name'] = $courierName,
                     $updates['tracking_number'] = $trackingNumber,
                 ],
-                SellerOrderStatus::Delivered => $updates['delivered_at'] = now(),
+                SellerOrderStatus::Delivered, SellerOrderStatus::PartiallyDelivered => $updates['delivered_at'] = now(),
                 SellerOrderStatus::ReturnedToOrigin => $updates['rto_delivered_at'] = now(),
                 SellerOrderStatus::Cancelled => [
                     $updates['cancelled_at'] = now(),
@@ -582,9 +582,11 @@ class OrderService implements OrderRestockInterface
             return;
         }
 
-        $allCancelled = $sellerOrders->every(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Cancelled);
-        $anyCancelled = $sellerOrders->contains(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Cancelled);
-        $allDelivered = $sellerOrders->every(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Delivered);
+        // RTO and lost packages close like a cancellation for the customer: nothing to collect.
+        // A partially delivered package counts as delivered (COD is collected for the delivered items).
+        $allCancelled = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isClosedUndelivered());
+        $anyCancelled = $sellerOrders->contains(fn (SellerOrder $so) => $so->status->isClosedUndelivered());
+        $allDelivered = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isDeliveredToCustomer());
 
         if ($allCancelled) {
             $order->status = OrderStatus::Cancelled;

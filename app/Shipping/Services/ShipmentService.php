@@ -416,36 +416,70 @@ class ShipmentService implements ShipmentServiceInterface
             throw new DomainException('NDR actions can only be taken on shipments in Delivery Failed (NDR) status.');
         }
 
+        $normalized = strtolower(trim($action));
+        $normalized = match ($normalized) {
+            'reattempt', 're-attempt' => 'reattempt',
+            'rto', 'return' => 'rto',
+            default => throw new DomainException("Unsupported NDR action: {$action}"),
+        };
+
+        // Contact/address/date changes only apply to a re-attempt; an RTO carries instructions at most
+        $carrierPayload = array_filter([
+            'instructions' => trim((string) ($payload['instructions'] ?? '')),
+        ]);
+
+        if ($normalized === 'reattempt') {
+            $phone = trim((string) ($payload['phone'] ?? ''));
+            if ($phone !== '') {
+                $phone = $this->normalizeIndianMobile($phone);
+            }
+
+            $carrierPayload += array_filter([
+                'phone' => $phone,
+                'address' => trim((string) ($payload['address'] ?? '')),
+                'reattempt_date' => trim((string) ($payload['reattempt_date'] ?? '')),
+            ]);
+        }
+
         $driver = $this->carrierManager->driver($shipment->provider);
-        $result = $driver->requestNdrAction($shipment->awb ?: $shipment->id, $action, $payload);
+        $result = $driver->requestNdrAction($shipment->awb ?: $shipment->id, $normalized, $carrierPayload);
 
         if (! $result['success']) {
             return $result;
         }
 
-        $updates = [
-            'ndr_action' => $action,
+        // Updated contact details live on the shipment only; the customer's saved addresses are never touched
+        $shipment->update([
+            'ndr_action' => $normalized,
             'ndr_actioned_at' => now(),
-        ];
-
-        if (! empty($payload['phone'])) {
-            $updates['ndr_updated_phone'] = (string) $payload['phone'];
-        }
-        if (! empty($payload['address'])) {
-            $updates['ndr_updated_address'] = (string) $payload['address'];
-        }
-
-        $shipment->update($updates);
+            'ndr_updated_phone' => $carrierPayload['phone'] ?? $shipment->ndr_updated_phone,
+            'ndr_updated_address' => $carrierPayload['address'] ?? $shipment->ndr_updated_address,
+        ]);
 
         // Sync tracking to reflect the updated state immediately
-        $normalized = strtolower(trim($action));
-        if ($normalized === 'rto' || $normalized === 'return') {
-            $this->syncTracking($shipment);
-        } elseif ($normalized === 'reattempt' || $normalized === 're-attempt') {
-            $this->syncTracking($shipment);
-        }
+        $this->syncTracking($shipment);
 
         return $result;
+    }
+
+    /**
+     * Both carriers accept exactly 10 digits; strip formatting and a +91/0 prefix, reject anything else.
+     */
+    protected function normalizeIndianMobile(string $phone): string
+    {
+        $digits = (string) preg_replace('/\D/', '', $phone);
+
+        if (strlen($digits) === 12 && str_starts_with($digits, '91')) {
+            $digits = substr($digits, 2);
+        } elseif (strlen($digits) === 11 && str_starts_with($digits, '0')) {
+            $digits = substr($digits, 1);
+        }
+
+        if (strlen($digits) !== 10) {
+            throw new DomainException('Updated phone must be a 10-digit mobile number.');
+        }
+
+        return $digits;
     }
 
     public function simulateStatusTransition(

@@ -242,6 +242,52 @@ class SellerLedgerService implements SellerLedgerServiceInterface
         });
     }
 
+    public function recordPartialDeliveryReversals(SellerOrderSettlement $settlement, array $undeliveredOrderItemIds): array
+    {
+        $reversed = ['sale' => 0, 'net' => 0];
+
+        if ($undeliveredOrderItemIds === []) {
+            return $reversed;
+        }
+
+        $now = CarbonImmutable::now();
+
+        DB::transaction(function () use ($settlement, $undeliveredOrderItemIds, $now, &$reversed) {
+            $entries = SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
+                ->whereIn('order_item_id', $undeliveredOrderItemIds)
+                ->whereNotIn('type', [
+                    LedgerEntryType::Reversal->value,
+                    LedgerEntryType::ShippingFee->value,
+                    LedgerEntryType::Payout->value,
+                    LedgerEntryType::Adjustment->value,
+                ])
+                ->get();
+
+            foreach ($entries as $entry) {
+                $created = $this->createEntryIfNotExists([
+                    'seller_profile_id' => $entry->seller_profile_id,
+                    'seller_order_id' => $entry->seller_order_id,
+                    'order_item_id' => $entry->order_item_id,
+                    'payout_id' => null,
+                    'type' => LedgerEntryType::Reversal,
+                    'amount' => -$entry->amount,
+                    'description' => "Reversal (not delivered): {$entry->description}",
+                    'source_key' => "reversal:{$entry->source_key}",
+                    'created_at' => $now,
+                ]);
+
+                if ($created) {
+                    $reversed['net'] -= $entry->amount;
+                    if ($entry->type === LedgerEntryType::Sale) {
+                        $reversed['sale'] += $entry->amount;
+                    }
+                }
+            }
+        });
+
+        return $reversed;
+    }
+
     public function getSellerBalance(int $sellerId): SellerBalanceDto
     {
         $onHoldPaise = (int) SellerOrderSettlement::where('seller_profile_id', $sellerId)
@@ -303,11 +349,11 @@ class SellerLedgerService implements SellerLedgerServiceInterface
     /**
      * @param  array<string, mixed>  $data
      */
-    private function createEntryIfNotExists(array $data): void
+    private function createEntryIfNotExists(array $data): bool
     {
-        SellerLedgerEntry::firstOrCreate(
+        return SellerLedgerEntry::firstOrCreate(
             ['source_key' => $data['source_key']],
             $data
-        );
+        )->wasRecentlyCreated;
     }
 }

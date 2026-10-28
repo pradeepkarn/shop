@@ -9,7 +9,9 @@ enum SellerOrderStatus: string
     case Packed = 'packed';
     case Shipped = 'shipped';
     case Delivered = 'delivered';
+    case PartiallyDelivered = 'partially_delivered';
     case ReturnedToOrigin = 'rto';
+    case LostInTransit = 'lost';
     case Cancelled = 'cancelled';
 
     public function label(): string
@@ -20,9 +22,27 @@ enum SellerOrderStatus: string
             self::Packed => 'Packed',
             self::Shipped => 'Shipped',
             self::Delivered => 'Delivered',
+            self::PartiallyDelivered => 'Partially Delivered',
             self::ReturnedToOrigin => 'Returned to Origin',
+            self::LostInTransit => 'Lost in Transit',
             self::Cancelled => 'Cancelled',
         };
+    }
+
+    /**
+     * Closed without reaching the customer and nothing to collect from them.
+     */
+    public function isClosedUndelivered(): bool
+    {
+        return in_array($this, [self::Cancelled, self::ReturnedToOrigin, self::LostInTransit], true);
+    }
+
+    /**
+     * Reached the customer, fully or in part; COD is collected for what was delivered.
+     */
+    public function isDeliveredToCustomer(): bool
+    {
+        return in_array($this, [self::Delivered, self::PartiallyDelivered], true);
     }
 
     public function canCancelByCustomer(): bool

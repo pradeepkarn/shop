@@ -187,6 +187,13 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                         </div>
                     </div>
 
+                    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::LostInTransit)
+                        <div data-test="lost-in-transit-notice" class="my-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+                            <strong class="font-bold">This package was lost in transit by the courier.</strong>
+                            You will not be charged for it.
+                        </div>
+                    @endif
+
                     <!-- Items list -->
                     @php
                         $shipment = app(\App\Shipping\Contracts\ShipmentLookupInterface::class)->getShipmentForSellerOrder($sellerOrder->id);
@@ -219,8 +226,9 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                                     </svg>
                                     <div>
-                                        <strong class="font-bold">Delivery attempt #{{ $shipment->ndrAttemptCount ?: 1 }} failed:</strong>
-                                        <span>{{ $shipment->latestNdrReason ?: 'Courier was unable to deliver your package (customer unavailable / address unreachable).' }}</span>
+                                        <strong class="font-bold">Delivery attempt failed</strong>
+                                        <span data-test="ndr-attempt-count" class="ml-1 text-[11px] font-semibold">(attempt {{ $shipment->ndrAttemptCount ?: 1 }})</span>
+                                        <p class="mt-0.5">Reason: {{ $shipment->latestNdrReason ?: 'Courier was unable to deliver your package (customer unavailable / address unreachable).' }}</p>
                                         <p class="mt-1 text-[11px] text-amber-800/80 dark:text-amber-300/80">
                                             The courier partner will re-attempt delivery or customer support will contact you.
                                         </p>

@@ -10,13 +10,20 @@ use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Models\Order;
 use App\Orders\Models\OrderItem;
 use App\Orders\Models\SellerOrder;
+use App\Returns\Models\UndeliveredItem;
+use App\Settlements\Contracts\PayoutServiceInterface;
 use App\Settlements\Contracts\SettlementServiceInterface;
+use App\Settlements\DTOs\PayoutBatchCreateInput;
+use App\Settlements\Enums\LedgerEntryType;
 use App\Settlements\Enums\SettlementStatus;
+use App\Settlements\Models\SellerLedgerEntry;
 use App\Settlements\Models\SellerOrderSettlement;
+use App\Settlements\Models\SellerPayout;
 use App\Shipping\Enums\ShipmentEventType;
 use App\Shipping\Enums\ShipmentStatus;
 use App\Shipping\Models\Shipment;
 use App\Shipping\Models\ShipmentEvent;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Str;
@@ -258,4 +265,160 @@ test('if releasing the settlement hold fails, the partial delivery resolution is
     expect($settlement->fresh()->is_partial_delivery_hold)->toBeTrue()
         ->and($shipment->fresh()->partial_delivery_data['resolved_at'] ?? null)->toBeNull()
         ->and(ShipmentEvent::where('shipment_id', $shipment->id)->where('event_type', ShipmentEventType::PartialDeliveryResolved)->count())->toBe(0);
+});
+
+test('partial delivery holds the settlement until admin marks delivered items, then releases it and records undelivered items', function () {
+    [$settlement, $shipment] = partialDeliveryFixture($this);
+    $settlements = app(SettlementServiceInterface::class);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->call('simulateTransition', 'partial_delivered');
+
+    // Held: no amount of waiting releases it while admin has not reviewed the items
+    $this->travel(30)->days();
+    $settlements->releaseMaturedSettlements();
+    expect($settlement->fresh()->is_partial_delivery_hold)->toBeTrue()
+        ->and($settlement->fresh()->status)->not->toBe(SettlementStatus::Eligible);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->set('selectedDeliveredItems', [(int) $this->item1->id])
+        ->call('submitPartialDelivery')
+        ->assertSee('Partial delivery marked and settlement hold released');
+
+    // Released into the normal return window, starting now
+    $released = $settlement->fresh();
+    expect($released->is_partial_delivery_hold)->toBeFalse()
+        ->and($released->status)->toBe(SettlementStatus::OnHold)
+        ->and($released->hold_until->format('Y-m-d H:i:s'))->toBe(now()->addDays(7)->format('Y-m-d H:i:s'));
+
+    // Undelivered item recorded for phase B missing-item handling; delivered item is not
+    $undelivered = UndeliveredItem::where('shipment_id', $shipment->id)->get();
+    expect($undelivered)->toHaveCount(1)
+        ->and($undelivered->first()->order_item_id)->toBe((int) $this->item2->id)
+        ->and($undelivered->first()->seller_order_id)->toBe($this->sellerOrder->id)
+        ->and($undelivered->first()->status)->toBe(UndeliveredItem::STATUS_PENDING)
+        ->and($undelivered->first()->recorded_by_admin_id)->toBe($this->admin->id);
+
+    $settlements->releaseMaturedSettlements();
+    expect($settlement->fresh()->status)->toBe(SettlementStatus::OnHold);
+
+    $this->travel(8)->days();
+    $settlements->releaseMaturedSettlements();
+    expect($settlement->fresh()->status)->toBe(SettlementStatus::Eligible);
+});
+
+test('a matured on-hold settlement is not released while a partial delivery hold is set', function () {
+    [$settlement] = partialDeliveryFixture($this);
+    $settlement->update([
+        'status' => SettlementStatus::OnHold,
+        'hold_until' => now()->subDay(),
+        'is_partial_delivery_hold' => true,
+    ]);
+
+    app(SettlementServiceInterface::class)->releaseMaturedSettlements();
+
+    expect($settlement->fresh()->status)->toBe(SettlementStatus::OnHold);
+});
+
+test('partial delivery reverses sale and fees of undelivered items so the seller is paid for delivered items only', function () {
+    config(['settlements.minimum_payout_amount_paise' => 10000]);
+    $this->sellerProfile->update([
+        'status' => 'approved',
+        'bank_account_holder' => 'Partial Seller',
+        'bank_account_number' => '123456789012',
+        'ifsc' => 'HDFC0001234',
+        'reviewed_at' => now()->subDays(10),
+        'bank_updated_at' => now()->subDays(12),
+    ]);
+
+    [$settlement, $shipment] = partialDeliveryFixture($this);
+
+    // Per item (50,000 sale): fees 7,830 + allocated forward shipping 2,500 => item net 39,670
+    $perItem = [
+        ['sale', LedgerEntryType::Sale, 50000],
+        ['commission', LedgerEntryType::Commission, -5000],
+        ['closing_fee', LedgerEntryType::ClosingFee, -1000],
+        ['gst_on_fees', LedgerEntryType::GstOnFees, -1080],
+        ['tcs', LedgerEntryType::Tcs, -250],
+        ['tds', LedgerEntryType::Tds, -500],
+        ['shipping_fee', LedgerEntryType::ShippingFee, -2500],
+    ];
+    foreach ([$this->item1, $this->item2] as $item) {
+        foreach ($perItem as [$key, $type, $amount]) {
+            SellerLedgerEntry::create([
+                'seller_profile_id' => $this->sellerProfile->id,
+                'seller_order_id' => $this->sellerOrder->id,
+                'order_item_id' => $item->id,
+                'type' => $type,
+                'amount' => $amount,
+                'description' => $type->label(),
+                'source_key' => "settlement:{$this->sellerOrder->id}:{$key}:{$item->id}",
+                'created_at' => now(),
+            ]);
+        }
+    }
+    $settlement->update(['gross_amount' => 100000, 'net_payout' => 79340, 'total_deductions' => 20660]);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->call('simulateTransition', 'partial_delivered');
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->set('selectedDeliveredItems', [(int) $this->item1->id])
+        ->call('submitPartialDelivery')
+        ->assertSee('Partial delivery marked and settlement hold released');
+
+    // Item 2: sale and every fee reversed, its forward shipping kept; item 1 untouched
+    $reversals = SellerLedgerEntry::where('seller_order_id', $this->sellerOrder->id)
+        ->where('type', LedgerEntryType::Reversal)->get();
+    expect($reversals)->toHaveCount(6)
+        ->and($reversals->pluck('order_item_id')->unique()->values()->all())->toBe([(int) $this->item2->id])
+        ->and($reversals->firstWhere('source_key', "reversal:settlement:{$this->sellerOrder->id}:shipping_fee:{$this->item2->id}"))->toBeNull();
+
+    $deliveredNet = 39670;
+    $undeliveredForwardShipping = 2500;
+
+    $fresh = $settlement->fresh();
+    expect($fresh->gross_amount)->toBe(50000)
+        ->and($fresh->net_payout)->toBe($deliveredNet - $undeliveredForwardShipping)
+        ->and($fresh->total_deductions)->toBe(50000 - ($deliveredNet - $undeliveredForwardShipping))
+        ->and((int) SellerLedgerEntry::where('seller_order_id', $this->sellerOrder->id)->sum('amount'))->toBe($fresh->net_payout);
+
+    // Orders: partially delivered, COD expected for the delivered item only; parent order completes
+    $sellerOrder = $this->sellerOrder->fresh();
+    $order = $this->order->fresh();
+    expect($sellerOrder->status)->toBe(SellerOrderStatus::PartiallyDelivered)
+        ->and($sellerOrder->expected_cod_amount_paise)->toBe(50000)
+        ->and($order->status)->toBe(OrderStatus::Completed)
+        ->and($order->payment_status)->toBe(PaymentStatus::Completed);
+
+    // After the return window the seller is paid exactly that amount
+    $this->travel(8)->days();
+    app(SettlementServiceInterface::class)->releaseMaturedSettlements();
+    app(PayoutServiceInterface::class)->createWeeklyPayoutBatch(new PayoutBatchCreateInput(scheduledPayoutDate: CarbonImmutable::now()));
+
+    expect(SellerPayout::where('seller_profile_id', $this->sellerProfile->id)->sole()->net_amount)
+        ->toBe($deliveredNet - $undeliveredForwardShipping);
+});
+
+test('confirming with every item delivered marks the order delivered without reversals', function () {
+    [$settlement, $shipment] = partialDeliveryFixture($this);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->call('simulateTransition', 'partial_delivered');
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->set('selectedDeliveredItems', [(int) $this->item1->id, (int) $this->item2->id])
+        ->call('submitPartialDelivery')
+        ->assertSee('Partial delivery marked and settlement hold released');
+
+    expect($this->sellerOrder->fresh()->status)->toBe(SellerOrderStatus::Delivered)
+        ->and($this->sellerOrder->fresh()->expected_cod_amount_paise)->toBeNull()
+        ->and(UndeliveredItem::count())->toBe(0)
+        ->and($settlement->fresh()->net_payout)->toBe(76580);
 });

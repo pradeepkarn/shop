@@ -34,9 +34,12 @@ interface SettlementServiceInterface
     public function confirmLostShipmentSettlement(string $sellerOrderId, int $adminId, ?string $notes = null): ?SellerOrderSettlement;
 
     /**
-     * Release partial delivery hold on a settlement after admin confirms delivered items.
+     * Release the partial delivery hold after admin confirms delivered items: reverse sale and fees for the
+     * undelivered items so the seller is paid only for what was delivered, then start the normal return window.
+     *
+     * @param  array<int>  $undeliveredOrderItemIds
      */
-    public function releasePartialDeliveryHold(string $sellerOrderId): ?SellerOrderSettlement;
+    public function releasePartialDeliveryHold(string $sellerOrderId, array $undeliveredOrderItemIds = []): ?SellerOrderSettlement;
 
     /**
      * Release all matured on_hold settlements whose return window has passed.

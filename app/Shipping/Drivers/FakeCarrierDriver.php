@@ -149,9 +149,10 @@ class FakeCarrierDriver implements ShippingCarrierInterface
                 status: ShipmentStatus::RtoInitiated,
                 providerStatus: 'RTO Initiated',
                 location: 'Destination Delivery Hub',
-                description: $payload['comments'] ?? $payload['instructions'] ?? 'RTO requested by administration',
+                description: $payload['instructions'] ?? 'RTO requested by administration',
                 occurredAt: now(),
                 providerNdrStatus: 'RTO',
+                providerEventId: 'SIM-'.Str::ulid(),
             );
 
             return [
@@ -161,9 +162,7 @@ class FakeCarrierDriver implements ShippingCarrierInterface
         }
 
         if ($normalizedAction === 'reattempt' || $normalizedAction === 're-attempt') {
-            $dateStr = isset($payload['date']) && is_numeric($payload['date'])
-                ? date('Y-m-d', (int) ($payload['date'] / 1000))
-                : ($payload['deferred_date'] ?? 'Next business day');
+            $dateStr = $payload['reattempt_date'] ?? 'Next business day';
 
             $desc = "Delivery re-attempt scheduled for {$dateStr}.";
             if (! empty($payload['phone'])) {
@@ -181,6 +180,7 @@ class FakeCarrierDriver implements ShippingCarrierInterface
                 description: $desc,
                 occurredAt: now(),
                 providerNdrStatus: 'REATTEMPT_SCHEDULED',
+                providerEventId: 'SIM-'.Str::ulid(),
             );
 
             return [

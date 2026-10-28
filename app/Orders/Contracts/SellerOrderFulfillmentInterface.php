@@ -41,6 +41,28 @@ interface SellerOrderFulfillmentInterface
     ): void;
 
     /**
+     * Mark a shipped seller order as Lost in Transit (courier lost it). The customer is not charged;
+     * stock is not restored because the goods are gone.
+     */
+    public function markLostInTransit(
+        string $sellerOrderId,
+        ?string $reason = null,
+    ): void;
+
+    /**
+     * Admin-confirmed outcome of a partial delivery: the seller order becomes Partially Delivered and, for COD,
+     * records the amount to collect for the delivered items only. With no undelivered items it is simply Delivered.
+     *
+     * @param  array<int>  $deliveredItemIds
+     * @param  array<int>  $undeliveredItemIds
+     */
+    public function confirmPartialDelivery(
+        string $sellerOrderId,
+        array $deliveredItemIds,
+        array $undeliveredItemIds,
+    ): void;
+
+    /**
      * Mark the seller order as Partial Delivered.
      */
     public function markPartialDelivered(

@@ -741,31 +741,55 @@ class ShiprocketCarrierDriver implements ShippingCarrierInterface
 
     /**
      * Request an NDR action on Shiprocket.
-     * Cites Postman collection item: "Action NDR" (POST {{url}}/v1/external/ndr/{awb}/action)
+     *
+     * Postman collection (docs/carriers/shiprocket): folder "NDR", item "Action NDR",
+     * POST https://apiv2.shiprocket.in/v1/external/ndr/{awb}/action.
+     * Documented params used: action ("re-attempt" | "return"), comments (required),
+     * phone, address1 and deferred_date (YYYY-MM-DD), the last three for re-attempt only.
      */
     public function requestNdrAction(string $awb, string $action, array $payload = []): array
     {
         $normalized = strtolower(trim($action));
-        $srAction = ($normalized === 'rto' || $normalized === 'return') ? 'return' : 're-attempt';
+        $srAction = match ($normalized) {
+            'reattempt', 're-attempt' => 're-attempt',
+            'rto', 'return' => 'return',
+            default => null,
+        };
+
+        if ($srAction === null) {
+            return ['success' => false, 'message' => "Unsupported NDR action for Shiprocket: {$action}"];
+        }
 
         $body = [
             'action' => $srAction,
-            'comments' => $payload['comments'] ?? $payload['instructions'] ?? ($srAction === 'return' ? 'RTO requested by admin' : 'Re-attempt requested by admin'),
+            'comments' => ! empty($payload['instructions'])
+                ? (string) $payload['instructions']
+                : ($srAction === 'return' ? 'RTO requested by admin' : 'Re-attempt requested by admin'),
         ];
 
-        if (! empty($payload['phone'])) {
-            $digits = preg_replace('/\D/', '', (string) $payload['phone']);
-            if (strlen($digits) === 10) {
-                $body['phone'] = $digits;
+        if ($srAction === 're-attempt') {
+            if (! empty($payload['phone'])) {
+                $phone = (string) $payload['phone'];
+                if (! preg_match('/^\d{10}$/', $phone)) {
+                    return ['success' => false, 'message' => 'Shiprocket requires the updated phone to be exactly 10 digits.'];
+                }
+                $body['phone'] = $phone;
             }
-        }
 
-        if (! empty($payload['address'])) {
-            $body['address1'] = (string) $payload['address'];
-        }
+            if (! empty($payload['address'])) {
+                $body['address1'] = (string) $payload['address'];
+            }
 
-        if (! empty($payload['deferred_date'])) {
-            $body['deferred_date'] = (string) $payload['deferred_date'];
+            if (! empty($payload['reattempt_date'])) {
+                $date = (string) $payload['reattempt_date'];
+                $timezone = (string) config('app.display_timezone', 'Asia/Kolkata');
+                $parsed = preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ? Carbon::createFromFormat('!Y-m-d', $date, $timezone) : null;
+
+                if (! $parsed || $parsed->format('Y-m-d') !== $date || $parsed->lte(Carbon::now($timezone)->startOfDay())) {
+                    return ['success' => false, 'message' => 'Shiprocket deferred date must be a future date (YYYY-MM-DD).'];
+                }
+                $body['deferred_date'] = $date;
+            }
         }
 
         if ($this->safeMode) {
@@ -778,7 +802,7 @@ class ShiprocketCarrierDriver implements ShippingCarrierInterface
         }
 
         try {
-            $response = $this->client()->post("/v1/external/ndr/{$awb}/action", $body);
+            $response = $this->client()->post("/ndr/{$awb}/action", $body);
             if ($response->successful()) {
                 return [
                     'success' => true,
