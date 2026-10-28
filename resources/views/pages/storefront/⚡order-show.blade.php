@@ -192,12 +192,25 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                             <strong class="font-bold">This package was lost in transit by the courier.</strong>
                             You will not be charged for it.
                         </div>
+                    @elseif ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::ReturnedToOrigin)
+                        <div data-test="rto-notice" class="my-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+                            <strong class="font-bold">Returned to seller.</strong>
+                            This package could not be delivered and went back to the seller. You will not be charged for it.
+                        </div>
                     @endif
 
                     <!-- Items list -->
                     @php
                         $shipment = app(\App\Shipping\Contracts\ShipmentLookupInterface::class)->getShipmentForSellerOrder($sellerOrder->id);
+                        $deliveredItemIds = array_map('intval', $shipment?->partialDeliveryData['delivered_item_ids'] ?? []);
                     @endphp
+
+                    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::PartiallyDelivered)
+                        <div data-test="partial-delivery-notice" class="my-4 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200">
+                            <strong class="font-bold">Partially delivered.</strong>
+                            Only some items in this package reached you; each item below shows whether it arrived. You are only charged for delivered items.
+                        </div>
+                    @endif
 
                     @if ($shipment)
                         <div class="my-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
@@ -274,6 +287,13 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                                     <p class="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
                                         Qty: <strong>{{ $item->qty }}</strong> &middot; Price: <strong>₹{{ number_format($item->unit_price / 100) }}</strong>
                                     </p>
+                                    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::PartiallyDelivered)
+                                        @if (in_array((int) $item->id, $deliveredItemIds, true))
+                                            <span data-test="item-delivered" class="mt-1 inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">Delivered</span>
+                                        @else
+                                            <span data-test="item-not-delivered" class="mt-1 inline-flex rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-bold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">Not delivered &mdash; not charged</span>
+                                        @endif
+                                    @endif
                                 </div>
                                 <div class="text-right">
                                     <span class="text-sm font-bold text-zinc-900 dark:text-white">

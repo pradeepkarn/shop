@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin;
 
 use App\Orders\Models\SellerOrder;
+use App\Returns\Contracts\CourierClaimServiceInterface;
 use App\Returns\Contracts\ReturnsLookupInterface;
 use App\Returns\Contracts\RtoIntakeServiceInterface;
 use App\Returns\Contracts\ShipmentExceptionServiceInterface;
@@ -74,6 +75,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
 
         try {
             $shipmentService->syncTracking($shipmentModel);
+            AdminActivityLogger::log('shipping.tracking_synced', $shipmentModel);
             session()->flash('shipment_success', 'Tracking successfully synced with carrier.');
             unset($this->shipment);
         } catch (\Throwable $e) {
@@ -199,9 +201,35 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
     }
 
+    public function updateClaimStatus(string $claimId, string $status, ?CourierClaimServiceInterface $claimService = null): void
+    {
+        $this->authorize('returns.manage');
+        $claimService = $claimService ?: app(CourierClaimServiceInterface::class);
+
+        $shipmentModel = $this->shipment;
+        if (! $shipmentModel) {
+            return;
+        }
+
+        try {
+            $claim = $claimService->updateClaimStatus($claimId, $status, shipmentId: $shipmentModel->id);
+
+            AdminActivityLogger::log('returns.claim_status_updated', $shipmentModel, [
+                'claim_id' => $claim->id,
+                'claim_number' => $claim->claimNumber,
+                'status' => $claim->status->value,
+            ]);
+
+            session()->flash('shipment_success', "Claim {$claim->claimNumber} marked {$claim->status->value}.");
+            unset($this->shipment);
+        } catch (\Throwable $e) {
+            session()->flash('shipment_error', 'Claim update failed: '.$e->getMessage());
+        }
+    }
+
     public function confirmLostShipment(?ShipmentExceptionServiceInterface $exceptionService = null): void
     {
-        $this->authorize('shipping.manage');
+        $this->authorize('returns.manage');
         $exceptionService = $exceptionService ?: app(ShipmentExceptionServiceInterface::class);
 
         $shipmentModel = $this->shipment;
@@ -227,7 +255,9 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                 adminId: auth()->id(),
             );
 
-            AdminActivityLogger::log('shipping.lost_confirmed', $shipmentModel);
+            AdminActivityLogger::log('returns.lost_confirmed', $shipmentModel, [
+                'declared_value_paise' => $shipmentModel->declared_value_paise,
+            ]);
             session()->flash('shipment_success', 'Shipment confirmed lost. Seller settlement continues as delivered, courier claim recorded against platform.');
             unset($this->shipment);
         } catch (\Throwable $e) {
@@ -237,7 +267,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
 
     public function submitPartialDelivery(?ShipmentExceptionServiceInterface $exceptionService = null): void
     {
-        $this->authorize('shipping.manage');
+        $this->authorize('returns.manage');
         $exceptionService = $exceptionService ?: app(ShipmentExceptionServiceInterface::class);
 
         $shipmentModel = $this->shipment;
@@ -260,7 +290,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                 notes: $this->partialNotes,
             );
 
-            AdminActivityLogger::log('shipping.partial_delivery_marked', $shipmentModel, [
+            AdminActivityLogger::log('returns.partial_delivery_confirmed', $shipmentModel, [
                 'delivered' => $delivered,
                 'undelivered' => $undelivered,
             ]);
@@ -293,8 +323,10 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     @php
         $shipmentModel = $this->shipment;
         $returnsLookup = app(\App\Returns\Contracts\ReturnsLookupInterface::class);
-        $rtoReport = $returnsLookup->getRtoReportForShipment($shipmentModel->id);
-        $courierClaims = $returnsLookup->getClaimsForShipment($shipmentModel->id);
+        // RTO reports and courier claims are Returns data: only shown with returns.view
+        $canViewReturns = (bool) auth('admin')->user()?->can('returns.view');
+        $rtoReport = $canViewReturns ? $returnsLookup->getRtoReportForShipment($shipmentModel->id) : null;
+        $courierClaims = $canViewReturns ? $returnsLookup->getClaimsForShipment($shipmentModel->id) : [];
         $orderModel = $this->sellerOrder;
         $isFakeSimulation = $shipmentModel->provider === 'fake' && (bool) config('shipping.fake_simulation_enabled', false);
     @endphp
@@ -317,32 +349,21 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             </p>
 
             <div class="flex flex-wrap gap-2 pt-1">
-                @php
-                    $simStatuses = [
-                        'picked_up' => 'Picked Up',
-                        'in_transit' => 'In Transit',
-                        'out_for_delivery' => 'Out for Delivery',
-                        'delivered' => 'Delivered',
-                        'delivery_failed' => 'Delivery Failed (NDR)',
-                        'rto_initiated' => 'RTO Initiated',
-                        'rto_delivered' => 'RTO Delivered',
-                        'lost' => 'Lost Shipment',
-                        'exception' => 'Exception',
-                        'partial_delivered' => 'Partial Delivered',
-                    ];
-                @endphp
-
-                @foreach ($simStatuses as $statusKey => $statusLabel)
+                @forelse ($shipmentModel->status->nextForwardStatuses() as $nextStatus)
                     <button
                         type="button"
-                        wire:click="simulateTransition('{{ $statusKey }}')"
+                        wire:click="simulateTransition('{{ $nextStatus->value }}')"
                         wire:loading.attr="disabled"
-                        data-test="simulate-{{ $statusKey }}"
+                        data-test="simulate-{{ $nextStatus->value }}"
                         class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 shadow-2xs hover:bg-amber-100 hover:border-amber-400 dark:border-amber-800 dark:bg-zinc-900 dark:text-amber-200 dark:hover:bg-amber-950/60 transition"
                     >
-                        &rarr; {{ $statusLabel }}
+                        &rarr; {{ $nextStatus->label() }}
                     </button>
-                @endforeach
+                @empty
+                    <span data-test="simulate-none" class="text-xs text-amber-800 dark:text-amber-300">
+                        {{ $shipmentModel->status->label() }} is final; no further courier steps to simulate.
+                    </span>
+                @endforelse
             </div>
         </div>
     @endif
@@ -487,10 +508,11 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                     </p>
                 </div>
 
-                @can('shipping.manage')
+                @can('returns.manage')
                     <button
                         type="button"
                         wire:click="confirmLostShipment"
+                        wire:confirm="Confirm this shipment is lost? The seller will be paid as delivered, the customer will not be charged, and a courier claim will be filed. This cannot be undone."
                         data-test="confirm-lost-shipment-btn"
                         class="rounded-xl bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white hover:bg-red-700 transition shadow-xs"
                     >
@@ -532,10 +554,11 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
 
             <div class="flex items-center gap-4">
                 <input wire:model="partialNotes" type="text" placeholder="Admin verification notes" class="flex-1 rounded-lg border border-indigo-300 bg-white p-2 text-xs text-zinc-900 dark:border-indigo-800 dark:bg-zinc-900 dark:text-white" />
-                @can('shipping.manage')
+                @can('returns.manage')
                     <button
                         type="button"
                         wire:click="submitPartialDelivery"
+                        wire:confirm="Confirm the selected items were delivered? Unselected items will be reversed from the seller's settlement and recorded as not delivered. This cannot be undone."
                         data-test="confirm-partial-delivery-btn"
                         class="rounded-xl bg-indigo-600 px-5 py-2 text-xs font-bold uppercase tracking-wider text-white hover:bg-indigo-700 transition shadow-xs"
                     >
@@ -547,7 +570,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     @endif
 
     {{-- RTO Review & Admin Decision Card --}}
-    @if ($shipmentModel->status === ShipmentStatus::RtoDelivered || $rtoReport)
+    @if ($canViewReturns && ($shipmentModel->status === ShipmentStatus::RtoDelivered || $rtoReport))
         <div data-test="rto-review-card" class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
             <div class="flex items-center justify-between border-b border-zinc-100 pb-3 dark:border-zinc-800">
                 <div>
@@ -599,9 +622,10 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                     <div class="pt-2">
                         <span class="text-xs font-bold text-zinc-400">Inspection Photos ({{ count($rtoReport->photos) }})</span>
                         <div class="mt-2 flex flex-wrap gap-2">
-                            @foreach ($rtoReport->photos as $photo)
-                                <a href="{{ Storage::disk('public')->url($photo) }}" target="_blank" class="block size-16 rounded-lg overflow-hidden border border-zinc-200 dark:border-zinc-700">
-                                    <img src="{{ Storage::disk('public')->url($photo) }}" alt="RTO Photo" class="size-full object-cover" />
+                            @foreach ($rtoReport->photos as $index => $photo)
+                                @php $photoUrl = route('admin.returns.rto-photo', ['report' => $rtoReport->id, 'index' => $index]); @endphp
+                                <a href="{{ $photoUrl }}" target="_blank" data-test="rto-photo-link" class="block size-16 rounded-lg overflow-hidden border border-zinc-200 dark:border-zinc-700">
+                                    <img src="{{ $photoUrl }}" alt="RTO Photo" class="size-full object-cover" />
                                 </a>
                             @endforeach
                         </div>
@@ -618,6 +642,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                             <button
                                 type="button"
                                 wire:click="submitRtoDecision('restocked')"
+                                wire:confirm="Restock this returned package? Stock will be added back to the listing."
                                 data-test="rto-restock-btn"
                                 class="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white hover:bg-emerald-700 transition shadow-xs"
                             >
@@ -627,6 +652,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                             <button
                                 type="button"
                                 wire:click="submitRtoDecision('written_off')"
+                                wire:confirm="Write off this returned package as damaged/unsellable? It will not be restocked. This cannot be undone."
                                 data-test="rto-writeoff-btn"
                                 class="rounded-xl border border-red-300 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-zinc-800 dark:text-red-300 transition"
                             >
@@ -713,7 +739,22 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                                 </div>
                                 <div class="text-right">
                                     <span class="font-bold text-zinc-900 dark:text-white">₹{{ number_format($claim->claimAmountPaise / 100) }}</span>
-                                    <p class="text-[10px] text-zinc-400">{{ strtoupper($claim->status->value) }}</p>
+                                    <p class="text-[10px] text-zinc-400" data-test="claim-status-{{ $claim->id }}">{{ strtoupper($claim->status->value) }}</p>
+                                    @can('returns.manage')
+                                        <div class="mt-1 flex justify-end gap-1">
+                                            @foreach ($claim->status->nextStatuses() as $nextClaimStatus)
+                                                <button
+                                                    type="button"
+                                                    wire:click="updateClaimStatus('{{ $claim->id }}', '{{ $nextClaimStatus->value }}')"
+                                                    wire:confirm="Mark claim {{ $claim->claimNumber }} as {{ $nextClaimStatus->value }}?"
+                                                    data-test="claim-{{ $nextClaimStatus->value }}-btn"
+                                                    class="rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-bold uppercase text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                                                >
+                                                    {{ $nextClaimStatus->value }}
+                                                </button>
+                                            @endforeach
+                                        </div>
+                                    @endcan
                                 </div>
                             </div>
                         @endforeach

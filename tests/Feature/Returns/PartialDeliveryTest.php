@@ -422,3 +422,30 @@ test('confirming with every item delivered marks the order delivered without rev
         ->and(UndeliveredItem::count())->toBe(0)
         ->and($settlement->fresh()->net_payout)->toBe(76580);
 });
+
+test('customer order page shows which items of a partially delivered package arrived', function () {
+    [, $shipment] = partialDeliveryFixture($this);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->call('simulateTransition', 'partial_delivered');
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->set('selectedDeliveredItems', [(int) $this->item1->id])
+        ->call('submitPartialDelivery');
+
+    $html = $this->actingAs($this->customer)
+        ->get(route('orders.show', ['order' => $this->order->order_number]))
+        ->assertOk()
+        ->assertSee('Partially delivered.')
+        ->assertSee('You are only charged for delivered items.')
+        ->getContent();
+
+    // Item 1 delivered, item 2 not: badges appear in item order
+    expect(substr_count($html, 'data-test="item-delivered"'))->toBe(1)
+        ->and(substr_count($html, 'data-test="item-not-delivered"'))->toBe(1)
+        ->and(strpos($html, 'Item 1'))->toBeLessThan(strpos($html, 'data-test="item-delivered"'))
+        ->and(strpos($html, 'Item 2'))->toBeLessThan(strpos($html, 'data-test="item-not-delivered"'))
+        ->and(strpos($html, 'data-test="item-delivered"'))->toBeLessThan(strpos($html, 'Item 2'));
+});

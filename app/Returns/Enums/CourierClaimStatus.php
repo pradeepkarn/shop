@@ -18,4 +18,18 @@ enum CourierClaimStatus: string
             self::Settled => 'Settled & Reimbursed',
         };
     }
+
+    /**
+     * Allowed next statuses: the courier approves or rejects a submitted claim, and an approved claim is settled.
+     *
+     * @return list<self>
+     */
+    public function nextStatuses(): array
+    {
+        return match ($this) {
+            self::Submitted => [self::Approved, self::Rejected],
+            self::Approved => [self::Settled],
+            self::Rejected, self::Settled => [],
+        };
+    }
 }

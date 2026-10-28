@@ -53,6 +53,7 @@ class CourierClaimService implements CourierClaimServiceInterface
         string $status,
         ?string $carrierClaimReference = null,
         ?string $notes = null,
+        ?string $shipmentId = null,
     ): CourierClaimDto {
         $statusEnum = CourierClaimStatus::tryFrom($status);
         if (! $statusEnum) {
@@ -61,6 +62,14 @@ class CourierClaimService implements CourierClaimServiceInterface
 
         /** @var CourierClaim $claim */
         $claim = CourierClaim::findOrFail($claimId);
+
+        if ($shipmentId !== null && $claim->shipment_id !== $shipmentId) {
+            throw new DomainException('This claim does not belong to the shipment.');
+        }
+
+        if (! in_array($statusEnum, $claim->status->nextStatuses(), true)) {
+            throw new DomainException("A {$claim->status->value} claim cannot be marked {$statusEnum->value}.");
+        }
 
         $updates = ['status' => $statusEnum];
         if ($carrierClaimReference !== null) {

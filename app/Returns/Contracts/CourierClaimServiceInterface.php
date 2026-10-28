@@ -18,10 +18,15 @@ interface CourierClaimServiceInterface
         ?string $notes = null,
     ): CourierClaimDto;
 
+    /**
+     * Move a claim to an allowed next status (submitted -> approved|rejected, approved -> settled).
+     * When $shipmentId is given, the claim must belong to that shipment.
+     */
     public function updateClaimStatus(
         string $claimId,
         string $status,
         ?string $carrierClaimReference = null,
         ?string $notes = null,
+        ?string $shipmentId = null,
     ): CourierClaimDto;
 }

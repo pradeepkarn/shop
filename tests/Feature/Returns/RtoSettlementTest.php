@@ -257,3 +257,16 @@ test('the rto charge is not voided and reduces the seller\'s next payout', funct
         ->and($delivered->fresh()->payout_id)->toBe($payout->id)
         ->and($this->settlement->fresh()->status)->toBe(SettlementStatus::InPayout);
 });
+
+test('customer order page says the package was returned to the seller and not charged', function () {
+    $this->sellerOrder->update(['status' => SellerOrderStatus::ReturnedToOrigin, 'rto_delivered_at' => now()]);
+
+    $order = Order::find($this->sellerOrder->order_id);
+
+    $this->actingAs($this->customer)
+        ->get(route('orders.show', ['order' => $order->order_number]))
+        ->assertOk()
+        ->assertSee('data-test="rto-notice"', false)
+        ->assertSee('Returned to seller.')
+        ->assertSee('You will not be charged for it.');
+});

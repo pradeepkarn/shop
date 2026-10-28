@@ -498,6 +498,10 @@ class ShipmentService implements ShipmentServiceInterface
             throw new DomainException('Simulation is only allowed for shipments using the fake carrier.');
         }
 
+        if (! in_array($status, $shipment->status->nextForwardStatuses(), true)) {
+            throw new DomainException("Cannot simulate {$status->label()} from {$shipment->status->label()}.");
+        }
+
         $driver = $this->carrierManager->driver('fake');
         if (! ($driver instanceof FakeCarrierDriver)) {
             throw new DomainException('Fake driver not active.');

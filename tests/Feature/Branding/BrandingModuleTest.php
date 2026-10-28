@@ -4,6 +4,7 @@ use App\Branding\Contracts\BrandingLookupInterface;
 use App\Branding\DTOs\BrandingData;
 use App\Branding\Services\BrandingService;
 use App\Mail\CustomerWelcomeMail;
+use App\Mail\StaffInvitationMail;
 use App\Models\Admin;
 use App\Models\AdminActivityLog;
 use App\Models\SellerProfile;
@@ -333,4 +334,23 @@ test('email templates use absolute logo URLs with APP_URL while web pages use ro
     $renderedWeb = Blade::render('<x-brand.logo area="seller" />');
     expect($renderedWeb)->toMatch('/src=["\']\/storage\/[^"\']+["\']/i')
         ->and($renderedWeb)->not->toMatch('/src=["\']https?:\/\//i');
+});
+
+test('rendered emails use an absolute http(s) logo src', function () {
+    Storage::fake('public');
+    app(BrandingService::class)->uploadLogo('email_logo_light', UploadedFile::fake()->image('email-logo.png', 200, 50));
+
+    $mails = [
+        new CustomerWelcomeMail(User::factory()->create(), 'token-1'),
+        new StaffInvitationMail(Admin::factory()->create(), 'token-2'),
+    ];
+
+    foreach ($mails as $mail) {
+        preg_match_all('/<img[^>]+src="([^"]+)"/i', $mail->render(), $matches);
+
+        expect($matches[1])->not->toBeEmpty();
+        foreach ($matches[1] as $src) {
+            expect($src)->toMatch('/^https?:\/\//i');
+        }
+    }
 });

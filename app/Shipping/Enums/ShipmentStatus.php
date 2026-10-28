@@ -37,6 +37,26 @@ enum ShipmentStatus: string
         };
     }
 
+    /**
+     * Statuses a forward shipment can move to next from this one (courier lifecycle).
+     * Used to offer and enforce fake-carrier simulation steps; terminal statuses have none.
+     *
+     * @return list<self>
+     */
+    public function nextForwardStatuses(): array
+    {
+        return match ($this) {
+            self::Created, self::PickupScheduled => [self::PickedUp, self::Lost, self::Exception],
+            self::PickedUp => [self::InTransit, self::Lost, self::Exception],
+            self::InTransit => [self::OutForDelivery, self::RtoInitiated, self::Lost, self::Exception],
+            self::OutForDelivery => [self::Delivered, self::PartialDelivered, self::DeliveryFailed, self::Lost, self::Exception],
+            self::DeliveryFailed => [self::OutForDelivery, self::RtoInitiated, self::Lost],
+            self::RtoInitiated => [self::RtoDelivered, self::Lost],
+            self::Exception => [self::InTransit, self::RtoInitiated, self::Lost],
+            self::Delivered, self::PartialDelivered, self::RtoDelivered, self::Cancelled, self::Lost => [],
+        };
+    }
+
     public function isTerminal(): bool
     {
         return in_array($this, [

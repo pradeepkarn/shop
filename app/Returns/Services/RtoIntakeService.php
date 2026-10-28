@@ -39,18 +39,21 @@ class RtoIntakeService implements RtoIntakeServiceInterface
 
         /** @var RtoIntakeReport $report */
         $report = DB::transaction(function () use ($sellerOrderId, $shipment, $statusEnum, $notes, $photos) {
-            return RtoIntakeReport::updateOrCreate(
-                ['seller_order_id' => $sellerOrderId],
-                [
-                    'shipment_id' => $shipment->id,
-                    'seller_profile_id' => $shipment->sellerProfileId,
-                    'condition_status' => $statusEnum,
-                    'notes' => $notes,
-                    'photos' => $photos ?? [],
-                    'reported_at' => now(),
-                    'admin_decision' => RtoAdminDecision::Pending,
-                ]
-            );
+            // A submitted report is read-only: the seller cannot overwrite it (or reset an admin decision)
+            if (RtoIntakeReport::where('seller_order_id', $sellerOrderId)->lockForUpdate()->exists()) {
+                throw new DomainException('An RTO condition report has already been submitted for this order.');
+            }
+
+            return RtoIntakeReport::create([
+                'seller_order_id' => $sellerOrderId,
+                'shipment_id' => $shipment->id,
+                'seller_profile_id' => $shipment->sellerProfileId,
+                'condition_status' => $statusEnum,
+                'notes' => $notes,
+                'photos' => $photos ?? [],
+                'reported_at' => now(),
+                'admin_decision' => RtoAdminDecision::Pending,
+            ]);
         });
 
         event(new RtoConditionReported(
@@ -77,6 +80,11 @@ class RtoIntakeService implements RtoIntakeServiceInterface
 
         /** @var RtoIntakeReport|null $report */
         $report = RtoIntakeReport::where('seller_order_id', $sellerOrderId)->first();
+
+        // Restock adds stock and write-off is final: a decision can only be made once
+        if ($report && $report->admin_decision !== RtoAdminDecision::Pending) {
+            throw new DomainException("RTO decision already recorded ({$report->admin_decision->value}).");
+        }
 
         // If seller missed deadline or didn't report, create an admin-initiated report
         if (! $report) {

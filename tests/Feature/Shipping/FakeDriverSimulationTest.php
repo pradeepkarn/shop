@@ -150,3 +150,98 @@ test('admin can simulate every fake milestone and events are recorded identicall
 
     expect($shipment->events()->count())->toBe(4);
 });
+
+test('fake simulation is disabled unless SHIPPING_FAKE_SIMULATION_ENABLED is set', function () {
+    // phpunit.xml and .env do not set the flag, so this is the shipped default
+    expect(config('shipping.fake_simulation_enabled'))->toBeFalse();
+});
+
+test('the toolbar offers only valid next statuses for the current status', function () {
+    config(['shipping.fake_simulation_enabled' => true]);
+
+    $shipment = Shipment::create([
+        'order_id' => $this->order->id,
+        'seller_order_id' => $this->sellerOrder->id,
+        'seller_profile_id' => $this->sellerProfile->id,
+        'provider' => 'fake',
+        'status' => ShipmentStatus::Created,
+        'awb' => 'SIM-NEXT-1',
+        'actual_weight_grams' => 500,
+        'volumetric_weight_grams' => 500,
+        'chargeable_weight_grams' => 500,
+        'length_cm' => 10,
+        'width_cm' => 10,
+        'height_cm' => 10,
+    ]);
+
+    $page = fn () => $this->actingAs($this->admin, 'admin')->get(route('admin.shipments.show', ['shipment' => $shipment->id]));
+
+    $page()->assertSee('data-test="simulate-picked_up"', false)
+        ->assertSee('data-test="simulate-lost"', false)
+        ->assertDontSee('data-test="simulate-delivered"', false)
+        ->assertDontSee('data-test="simulate-rto_delivered"', false)
+        ->assertDontSee('data-test="simulate-partial_delivered"', false);
+
+    $shipment->update(['status' => ShipmentStatus::OutForDelivery]);
+    $page()->assertSee('data-test="simulate-delivered"', false)
+        ->assertSee('data-test="simulate-delivery_failed"', false)
+        ->assertSee('data-test="simulate-partial_delivered"', false)
+        ->assertDontSee('data-test="simulate-picked_up"', false);
+
+    $shipment->update(['status' => ShipmentStatus::Delivered]);
+    $page()->assertSee('data-test="simulate-none"', false)
+        ->assertDontSee('data-test="simulate-lost"', false);
+});
+
+test('an invalid simulated transition is rejected on the server', function () {
+    config(['shipping.fake_simulation_enabled' => true]);
+
+    $shipment = Shipment::create([
+        'order_id' => $this->order->id,
+        'seller_order_id' => $this->sellerOrder->id,
+        'seller_profile_id' => $this->sellerProfile->id,
+        'provider' => 'fake',
+        'status' => ShipmentStatus::Created,
+        'awb' => 'SIM-INVALID-1',
+        'actual_weight_grams' => 500,
+        'volumetric_weight_grams' => 500,
+        'chargeable_weight_grams' => 500,
+        'length_cm' => 10,
+        'width_cm' => 10,
+        'height_cm' => 10,
+    ]);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->call('simulateTransition', 'delivered')
+        ->assertSee('Cannot simulate Delivered from Created.');
+
+    expect($shipment->fresh()->status)->toBe(ShipmentStatus::Created)
+        ->and($shipment->events()->count())->toBe(0);
+});
+
+test('simulation is rejected on the server when the flag is off, even for fake shipments', function () {
+    config(['shipping.fake_simulation_enabled' => false]);
+
+    $shipment = Shipment::create([
+        'order_id' => $this->order->id,
+        'seller_order_id' => $this->sellerOrder->id,
+        'seller_profile_id' => $this->sellerProfile->id,
+        'provider' => 'fake',
+        'status' => ShipmentStatus::Created,
+        'awb' => 'SIM-OFF-1',
+        'actual_weight_grams' => 500,
+        'volumetric_weight_grams' => 500,
+        'chargeable_weight_grams' => 500,
+        'length_cm' => 10,
+        'width_cm' => 10,
+        'height_cm' => 10,
+    ]);
+
+    Livewire::actingAs($this->admin, 'admin')
+        ->test('pages::admin.shipments-show', ['shipment' => $shipment->id])
+        ->call('simulateTransition', 'picked_up')
+        ->assertSee('Fake carrier simulation is disabled.');
+
+    expect($shipment->fresh()->status)->toBe(ShipmentStatus::Created);
+});

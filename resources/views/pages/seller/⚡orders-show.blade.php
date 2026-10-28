@@ -297,18 +297,30 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
 
         $this->authorize('update', $order);
 
+        if ($order->status !== SellerOrderStatus::ReturnedToOrigin) {
+            session()->flash('order_error', 'A condition report can only be submitted for a package returned to you (RTO).');
+
+            return;
+        }
+
+        if (app(ReturnsLookupInterface::class)->isRtoInspectionDeadlinePassed($order->rto_delivered_at?->toIso8601String())) {
+            session()->flash('order_error', 'The inspection window for this returned package has closed.');
+
+            return;
+        }
+
         $this->validate([
             'rtoCondition' => ['required', 'string', 'in:intact,damaged,wrong_item,incomplete'],
             'rtoNotes' => ['nullable', 'string', 'max:1000'],
             'rtoPhotos' => ['nullable', 'array', 'max:5'],
-            'rtoPhotos.*' => ['image', 'max:5120'],
+            // mimes is checked against the file contents, not just the extension
+            'rtoPhotos.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
+        // Private disk: photos are served only through authorised routes (owning seller, or admin with returns.view)
         $storedPaths = [];
-        if (! empty($this->rtoPhotos)) {
-            foreach ($this->rtoPhotos as $file) {
-                $storedPaths[] = $file->store('rto_photos', 'public');
-            }
+        foreach ($this->rtoPhotos as $file) {
+            $storedPaths[] = $file->store("rto_photos/{$order->id}", 'local');
         }
 
         try {
@@ -323,6 +335,7 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
             $this->rtoPhotos = [];
             unset($this->order);
         } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Storage::disk('local')->delete($storedPaths);
             session()->flash('order_error', 'Submission failed: '.$e->getMessage());
         }
     }
@@ -645,7 +658,7 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                     <p class="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
                         Delivered back to your address on @datetime($rtoDeliveredAt ?: $sellerOrder->updated_at).
                         @if (! $rtoReport && $deadline)
-                            Inspection deadline: <strong class="{{ $isDeadlinePassed ? 'text-red-600' : 'text-amber-900 dark:text-amber-100' }}">@datetime($deadline) ({{ $daysAllowed }} days)</strong>.
+                            Inspection deadline: <strong data-test="rto-deadline" class="{{ $isDeadlinePassed ? 'text-red-600' : 'text-amber-900 dark:text-amber-100' }}">@datetime($deadline) ({{ $daysAllowed }} days)</strong>.
                         @endif
                     </p>
                 </div>
@@ -675,8 +688,8 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                         <div>
                             <span class="text-zinc-500">Uploaded photos ({{ count($rtoReport->photos) }}):</span>
                             <div class="mt-1 flex flex-wrap gap-2">
-                                @foreach ($rtoReport->photos as $p)
-                                    <img src="{{ Storage::disk('public')->url($p) }}" class="size-16 rounded-lg object-cover border border-amber-200" alt="RTO proof" />
+                                @foreach ($rtoReport->photos as $index => $p)
+                                    <img src="{{ route('seller.returns.rto-photo', ['report' => $rtoReport->id, 'index' => $index]) }}" data-test="seller-rto-photo" class="size-16 rounded-lg object-cover border border-amber-200" alt="RTO proof" />
                                 @endforeach
                             </div>
                         </div>
@@ -705,8 +718,9 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                         </div>
 
                         <div>
-                            <label class="block text-xs font-bold text-amber-950 dark:text-amber-200 mb-1">Proof Photos (Up to 5 images)</label>
-                            <input type="file" wire:model="rtoPhotos" multiple accept="image/*" class="w-full text-xs text-zinc-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-100 file:text-amber-800 hover:file:bg-amber-200" />
+                            <label class="block text-xs font-bold text-amber-950 dark:text-amber-200 mb-1">Proof Photos (up to 5; JPG, PNG or WebP, max 5 MB each)</label>
+                            <input type="file" wire:model="rtoPhotos" multiple accept="image/jpeg,image/png,image/webp" class="w-full text-xs text-zinc-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-100 file:text-amber-800 hover:file:bg-amber-200" />
+                            @error('rtoPhotos') <p class="text-red-600 text-[11px] mt-1">{{ $message }}</p> @enderror
                             @error('rtoPhotos.*') <p class="text-red-600 text-[11px] mt-1">{{ $message }}</p> @enderror
                         </div>
                     </div>
