@@ -74,6 +74,61 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
             ->get();
     }
 
+    /** @var array<string, string> request id => fault override (seller_fault, customer_remorse, courier_fault) */
+    public array $qcFault = [];
+
+    /** @var array<string, string> request id => failed-QC outcome (ship_back, partial_refund, full_refund) */
+    public array $qcFailOutcome = [];
+
+    /** @var array<string, string> request id => partial refund in rupees */
+    public array $qcPartialAmount = [];
+
+    /** @var array<string, string> request id => QC notes */
+    public array $qcNotes = [];
+
+    public function qcPass(string $returnRequestId, ReturnRequestServiceInterface $returns): void
+    {
+        $this->decideQc($returnRequestId, true, $returns);
+    }
+
+    public function qcFail(string $returnRequestId, ReturnRequestServiceInterface $returns): void
+    {
+        $this->decideQc($returnRequestId, false, $returns);
+    }
+
+    protected function decideQc(string $returnRequestId, bool $passed, ReturnRequestServiceInterface $returns): void
+    {
+        $this->authorize('returns.manage');
+
+        try {
+            $fault = ($this->qcFault[$returnRequestId] ?? '') !== '' ? \App\Returns\Enums\ReturnFault::from($this->qcFault[$returnRequestId]) : null;
+            $partial = ($this->qcPartialAmount[$returnRequestId] ?? '') !== '' ? (int) round((float) $this->qcPartialAmount[$returnRequestId] * 100) : null;
+
+            $request = $returns->decideQc(
+                returnRequestId: $returnRequestId,
+                adminId: (int) auth()->id(),
+                passed: $passed,
+                failOutcome: $passed ? null : ($this->qcFailOutcome[$returnRequestId] ?? null),
+                partialAmountPaise: $partial,
+                fault: $fault,
+                notes: ($this->qcNotes[$returnRequestId] ?? '') ?: null,
+            );
+
+            AdminActivityLogger::log('returns.qc_decided', $request, [
+                'result' => $request->qc_result,
+                'outcome' => $request->qc_outcome,
+                'fault' => $request->qc_fault,
+                'refund_id' => $request->refund_id,
+                'replacement_seller_order_id' => $request->replacement_seller_order_id,
+            ]);
+
+            session()->flash('returns_success', 'QC recorded: '.str_replace('_', ' ', (string) $request->qc_outcome).'.');
+            unset($this->returnRequests);
+        } catch (\Throwable $e) {
+            session()->flash('returns_error', 'QC failed: '.$e->getMessage());
+        }
+    }
+
     public function approveReturn(string $returnRequestId, ReturnRequestServiceInterface $returns): void
     {
         $this->authorize('returns.manage');
@@ -218,6 +273,55 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
                         @endif
                     </div>
                 </div>
+
+                @if (! empty($request->photos))
+                    <p class="flex flex-wrap gap-2">
+                        @foreach ($request->photos as $index => $photo)
+                            <a href="{{ route('admin.returns.request-photo', ['request' => $request->id, 'kind' => 'customer', 'index' => $index]) }}" target="_blank" class="underline">Customer photo {{ $index + 1 }}</a>
+                        @endforeach
+                    </p>
+                @endif
+
+                @if ($request->status === ReturnRequestStatus::Received)
+                    <div class="border-t border-zinc-200 pt-2 dark:border-zinc-700">
+                        @if ($request->seller_reported_at)
+                            <p data-test="seller-report">Seller report: <strong>{{ str_replace('_', ' ', $request->seller_condition) }}</strong>{{ $request->seller_report_notes ? ' — '.$request->seller_report_notes : '' }}
+                                @foreach ($request->seller_report_photos ?? [] as $index => $photo)
+                                    · <a href="{{ route('admin.returns.request-photo', ['request' => $request->id, 'kind' => 'seller', 'index' => $index]) }}" target="_blank" class="underline">photo {{ $index + 1 }}</a>
+                                @endforeach
+                            </p>
+                        @elseif ($request->sellerReportMissed())
+                            <p data-test="seller-report-missed" class="font-semibold text-red-600">Seller missed the report deadline (@datetime($request->report_deadline_at)); decide without it.</p>
+                        @else
+                            <p>Waiting for the seller's condition report (due @datetime($request->report_deadline_at)).</p>
+                        @endif
+                    </div>
+
+                    @can('returns.manage')
+                        @if ($request->seller_reported_at || $request->sellerReportMissed())
+                            <div data-test="qc-form" class="grid grid-cols-1 md:grid-cols-2 gap-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+                                <select wire:model="qcFault.{{ $request->id }}" class="rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
+                                    <option value="">Fault: default ({{ $request->reason->fault()->label() }} on pass, customer on fail)</option>
+                                    @foreach (\App\Returns\Enums\ReturnFault::cases() as $faultCase)
+                                        <option value="{{ $faultCase->value }}">{{ $faultCase->label() }}</option>
+                                    @endforeach
+                                </select>
+                                <input wire:model="qcNotes.{{ $request->id }}" type="text" placeholder="QC notes" class="rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                                <button type="button" wire:click="qcPass('{{ $request->id }}')" wire:confirm="QC passed? The item is restocked and the customer gets a {{ $request->preference }}. This cannot be changed." data-test="qc-pass-btn" class="rounded-lg bg-emerald-600 px-3 py-1.5 font-bold text-white hover:bg-emerald-700">QC pass ({{ $request->preference }})</button>
+                                <div class="flex gap-1">
+                                    <select wire:model="qcFailOutcome.{{ $request->id }}" class="rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
+                                        <option value="">If failed…</option>
+                                        <option value="ship_back">Ship back to customer</option>
+                                        <option value="partial_refund">Partial refund</option>
+                                        <option value="full_refund">Full refund anyway</option>
+                                    </select>
+                                    <input wire:model="qcPartialAmount.{{ $request->id }}" type="number" step="0.01" min="0" placeholder="₹" class="w-20 rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                                    <button type="button" wire:click="qcFail('{{ $request->id }}')" wire:confirm="QC failed? The item is not restocked. This cannot be changed." data-test="qc-fail-btn" class="rounded-lg border border-red-300 px-3 py-1.5 font-bold text-red-600">QC fail</button>
+                                </div>
+                            </div>
+                        @endif
+                    @endcan
+                @endif
 
                 @can('returns.manage')
                     @if (in_array($request->status, [ReturnRequestStatus::Requested, ReturnRequestStatus::InfoRequested], true))

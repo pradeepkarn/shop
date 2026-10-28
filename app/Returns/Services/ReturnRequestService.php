@@ -2,14 +2,24 @@
 
 namespace App\Returns\Services;
 
+use App\Mail\ReturnUpdateMail;
 use App\Models\Admin;
+use App\Models\SellerProfile;
+use App\Models\User;
 use App\Orders\Contracts\CustomerRefundServiceInterface;
+use App\Orders\Contracts\OrderRestockInterface;
+use App\Orders\Contracts\ReplacementOrderServiceInterface;
 use App\Orders\Contracts\ReturnableOrderLookupInterface;
+use App\Orders\Contracts\SellerOrderFulfillmentInterface;
 use App\Orders\Contracts\SellerOrderReturnWindowLookupInterface;
 use App\Orders\Enums\SellerOrderStatus;
+use App\Returns\Contracts\CourierClaimServiceInterface;
 use App\Returns\Contracts\ReturnRequestServiceInterface;
+use App\Returns\Enums\ReturnFault;
 use App\Returns\Enums\ReturnReason;
 use App\Returns\Enums\ReturnRequestStatus;
+use App\Returns\Enums\RtoConditionStatus;
+use App\Returns\Models\PlatformLoss;
 use App\Returns\Models\ReturnRequest;
 use App\Returns\Models\ReturnRequestItem;
 use App\Returns\Models\UndeliveredItem;
@@ -20,6 +30,7 @@ use App\Shipping\Contracts\ShipmentServiceInterface;
 use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -33,6 +44,10 @@ class ReturnRequestService implements ReturnRequestServiceInterface
         protected ShipmentServiceInterface $shipments,
         protected ShipmentLookupInterface $shipmentLookup,
         protected CustomerRefundServiceInterface $refunds,
+        protected OrderRestockInterface $inventory,
+        protected ReplacementOrderServiceInterface $replacements,
+        protected SellerOrderFulfillmentInterface $orderFulfillment,
+        protected CourierClaimServiceInterface $claims,
     ) {}
 
     public function returnableLines(string $sellerOrderId): array
@@ -42,7 +57,7 @@ class ReturnRequestService implements ReturnRequestServiceInterface
             return [];
         }
 
-        $delivered = in_array($order->status, [SellerOrderStatus::Delivered, SellerOrderStatus::PartiallyDelivered], true)
+        $delivered = in_array($order->status, [SellerOrderStatus::Delivered, SellerOrderStatus::PartiallyDelivered, SellerOrderStatus::PartiallyRefunded], true)
             && $order->deliveredAt !== null;
 
         // The window saved when the package was delivered; later vertical edits never change it.
@@ -98,6 +113,11 @@ class ReturnRequestService implements ReturnRequestServiceInterface
 
         if (! in_array($preference, [ReturnRequest::PREFERENCE_REFUND, ReturnRequest::PREFERENCE_REPLACEMENT], true)) {
             throw new DomainException('Choose a refund or a replacement.');
+        }
+
+        // A replacement unit already used its one replacement: returning it again can only be refunded
+        if ($preference === ReturnRequest::PREFERENCE_REPLACEMENT && $this->replacements->isReplacement($sellerOrderId)) {
+            throw new DomainException('A replacement can only be returned for a refund.');
         }
 
         $units = array_filter(array_map('intval', $units), fn (int $n) => $n > 0);
@@ -339,9 +359,272 @@ class ReturnRequestService implements ReturnRequestServiceInterface
 
     public function pickupReceived(string $reverseShipmentId): void
     {
-        ReturnRequest::where('reverse_shipment_id', $reverseShipmentId)
-            ->where('status', ReturnRequestStatus::Approved->value)
-            ->update(['status' => ReturnRequestStatus::Received->value]);
+        $request = DB::transaction(function () use ($reverseShipmentId) {
+            /** @var ReturnRequest|null $request */
+            $request = ReturnRequest::where('reverse_shipment_id', $reverseShipmentId)
+                ->where('status', ReturnRequestStatus::Approved->value)
+                ->lockForUpdate()
+                ->first();
+            if (! $request) {
+                return null;
+            }
+
+            // The seller reports the condition within return_report_days (shown in India time)
+            $request->update([
+                'status' => ReturnRequestStatus::Received,
+                'received_at' => now(),
+                'report_deadline_at' => now()->addDays((int) config('returns.return_report_days', 3)),
+            ]);
+
+            return $request;
+        });
+
+        if ($request) {
+            $this->notify($request, 'received', seller: true);
+        }
+    }
+
+    public function submitSellerReport(string $returnRequestId, int $sellerProfileId, string $condition, ?string $notes, array $photos = []): ReturnRequest
+    {
+        $conditionEnum = RtoConditionStatus::tryFrom($condition);
+        if (! $conditionEnum) {
+            throw new DomainException('Choose the condition the item arrived in.');
+        }
+
+        Validator::make(['photos' => $photos], [
+            'photos' => ['array', 'max:5'],
+            'photos.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ])->validate();
+
+        // Same pattern as the RTO intake report: private disk, own packages only, read-only once submitted
+        $stored = array_map(fn ($photo) => $photo->store("return_reports/{$returnRequestId}", 'local'), $photos);
+
+        try {
+            return DB::transaction(function () use ($returnRequestId, $sellerProfileId, $conditionEnum, $notes, $stored) {
+                $request = $this->lockInStatus($returnRequestId, [ReturnRequestStatus::Received]);
+
+                if ($this->orders->forSellerOrder($request->seller_order_id)?->sellerProfileId !== $sellerProfileId) {
+                    throw new DomainException('This return is not for one of your packages.');
+                }
+
+                if ($request->seller_reported_at) {
+                    throw new DomainException('The condition report has already been submitted.');
+                }
+
+                if ($request->sellerReportMissed()) {
+                    throw new DomainException('The report deadline has passed; the marketplace will decide without it.');
+                }
+
+                $request->update([
+                    'seller_condition' => $conditionEnum->value,
+                    'seller_report_notes' => $notes,
+                    'seller_report_photos' => $stored,
+                    'seller_reported_at' => now(),
+                ]);
+
+                return $request->fresh();
+            });
+        } catch (\Throwable $e) {
+            Storage::disk('local')->delete($stored);
+
+            throw $e;
+        }
+    }
+
+    public function decideQc(
+        string $returnRequestId,
+        int $adminId,
+        bool $passed,
+        ?string $failOutcome = null,
+        ?int $partialAmountPaise = null,
+        ?ReturnFault $fault = null,
+        ?string $notes = null,
+    ): ReturnRequest {
+        $decided = DB::transaction(function () use ($returnRequestId, $adminId, $passed, $failOutcome, $partialAmountPaise, $fault, $notes) {
+            // Received and undecided only: a second decision finds the request resolved
+            $request = $this->lockInStatus($returnRequestId, [ReturnRequestStatus::Received]);
+            $request->load('items');
+
+            if (! $request->seller_reported_at && ! $request->sellerReportMissed()) {
+                throw new DomainException('Wait for the seller\'s condition report (due '.format_datetime($request->report_deadline_at).').');
+            }
+
+            $sellerOrderId = $request->seller_order_id;
+            $units = $request->items->pluck('units', 'order_item_id')->all();
+            $lines = $request->items->mapWithKeys(fn (ReturnRequestItem $item) => [
+                $item->order_item_id => ['units' => $item->units, 'line_qty' => $item->line_qty, 'return_item_id' => $item->id],
+            ])->all();
+            // A failed check is the customer's doing unless the admin says otherwise
+            $fault ??= $passed ? $request->reason->fault() : ReturnFault::CustomerRemorse;
+            // The seller pays the return pickup in every case
+            $shipping = ['return_shipping' => (float) config('returns.return_shipping_multiplier', 1.0)];
+            $replacementMultiplier = (float) config('returns.replacement_shipping_multiplier', 1.0);
+            $value = $this->refunds->unitsValue($sellerOrderId, $units);
+            $refund = null;
+            $replacementId = null;
+            $shipBackId = null;
+            $reverseSale = false;
+            $ratio = [1, 1];
+
+            if ($passed) {
+                // Restock only on pass (buy box refreshed)
+                foreach ($request->items as $item) {
+                    $this->inventory->restockOrderItemUnits($item->order_item_id, $item->units);
+                }
+
+                if ($request->preference === ReturnRequest::PREFERENCE_REPLACEMENT && ! $this->replacements->isReplacement($sellerOrderId)) {
+                    try {
+                        $replacementId = $this->replacements->createReplacement($sellerOrderId, $units, $request->id);
+                        $shipping['replacement_shipping'] = $replacementMultiplier;
+                    } catch (DomainException) {
+                        // Out of stock or listing inactive: becomes a refund automatically
+                    }
+                }
+
+                if ($replacementId) {
+                    $outcome = 'replacement';
+                } else {
+                    $refund = $this->refunds->createRefund(ReturnRequest::REFUND_SOURCE, $request->id, $sellerOrderId, $units, true);
+                    $outcome = $request->preference === ReturnRequest::PREFERENCE_REPLACEMENT ? 'converted_to_refund' : 'refund';
+                    $reverseSale = true;
+                }
+            } else {
+                $outcome = match ($failOutcome) {
+                    'ship_back', 'partial_refund', 'full_refund' => $failOutcome,
+                    default => throw new DomainException('Choose what happens to a failed return: ship back, partial refund or full refund.'),
+                };
+
+                if ($outcome === 'ship_back') {
+                    $shipBackId = $this->shipments->createShipBackBooking($sellerOrderId, $units, $value)->id;
+                    $shipping['ship_back_shipping'] = $replacementMultiplier;
+                } else {
+                    $amount = $outcome === 'partial_refund' ? $partialAmountPaise : null;
+                    if ($outcome === 'partial_refund' && ($amount === null || $amount < 1 || $amount > $value)) {
+                        throw new DomainException('Enter a partial refund between ₹0.01 and ₹'.number_format($value / 100, 2).'.');
+                    }
+
+                    $refund = $this->refunds->createRefund(ReturnRequest::REFUND_SOURCE, $request->id, $sellerOrderId, $units, true, $amount);
+                    $reverseSale = true;
+                    $ratio = $amount !== null ? [$amount, $value] : [1, 1];
+                }
+            }
+
+            $this->settlements->settleReturn($sellerOrderId, $request->id, $lines, [
+                'reverse_sale' => $reverseSale,
+                'reverse_fees' => $fault->reversesFees(),
+                'refund_ratio' => $ratio,
+                'shipping' => $shipping,
+            ]);
+
+            $request->update([
+                'status' => ReturnRequestStatus::Resolved,
+                'qc_result' => $passed ? ReturnRequest::QC_PASSED : ReturnRequest::QC_FAILED,
+                'qc_outcome' => $outcome,
+                'qc_fault' => $fault->value,
+                'qc_notes' => $notes,
+                'qc_by_admin_id' => $adminId,
+                'qc_at' => now(),
+                'refund_id' => $refund?->id,
+                'replacement_seller_order_id' => $replacementId,
+                'ship_back_shipment_id' => $shipBackId,
+            ]);
+
+            $this->settlements->releaseReturnHold($sellerOrderId);
+            if ($refund) {
+                $this->orderFulfillment->recordReturnRefund($sellerOrderId);
+            }
+
+            return $request;
+        });
+
+        // Courier booking after commit, no locks held
+        if ($decided->ship_back_shipment_id) {
+            $this->shipments->bookShipment($decided->ship_back_shipment_id);
+        }
+
+        $event = $decided->qc_result === ReturnRequest::QC_PASSED ? 'qc_passed' : 'qc_failed';
+        $this->notify($decided, $decided->qc_outcome === 'converted_to_refund' ? 'converted_to_refund' : $event);
+        $this->notify($decided, $event, seller: true);
+
+        return $decided->fresh();
+    }
+
+    public function pickupLost(string $reverseShipmentId): void
+    {
+        $request = DB::transaction(function () use ($reverseShipmentId) {
+            /** @var ReturnRequest|null $request */
+            $request = ReturnRequest::with('items')
+                ->where('reverse_shipment_id', $reverseShipmentId)
+                ->where('status', ReturnRequestStatus::Approved->value)
+                ->lockForUpdate()
+                ->first();
+            if (! $request) {
+                return null;
+            }
+
+            $sellerOrderId = $request->seller_order_id;
+            $units = $request->items->pluck('units', 'order_item_id')->all();
+            $value = $this->refunds->unitsValue($sellerOrderId, $units);
+
+            // The customer handed the item over: refunded in full. The seller's sale is NOT reversed (courier loss).
+            $refund = $this->refunds->createRefund(ReturnRequest::REFUND_SOURCE, $request->id, $sellerOrderId, $units, true);
+
+            $claim = $this->claims->recordClaim(
+                shipmentId: $reverseShipmentId,
+                sellerOrderId: $sellerOrderId,
+                carrierName: (string) $this->shipmentLookup->getShipmentById($reverseShipmentId)?->provider,
+                claimType: 'lost_shipment',
+                claimAmountPaise: $value,
+                bearer: (string) config('returns.courier_loss_bearer', 'platform'),
+                notes: 'Return pickup lost by the courier after pickup',
+            );
+
+            PlatformLoss::create([
+                'loss_type' => PlatformLoss::TYPE_LOST_RETURN,
+                'seller_order_id' => $sellerOrderId,
+                'shipment_id' => $reverseShipmentId,
+                'courier_claim_id' => $claim->id,
+                'loss_amount_paise' => $refund->amountPaise,
+                'declared_value_paise' => $value,
+                'notes' => 'Customer refunded for a return the courier lost',
+            ]);
+
+            $request->update([
+                'status' => ReturnRequestStatus::Resolved,
+                'qc_outcome' => 'lost_refund',
+                'qc_fault' => ReturnFault::CourierFault->value,
+                'refund_id' => $refund->id,
+            ]);
+
+            $this->settlements->releaseReturnHold($sellerOrderId);
+            $this->orderFulfillment->recordReturnRefund($sellerOrderId);
+
+            return $request;
+        });
+
+        if ($request) {
+            $this->notify($request, 'lost_refund');
+        }
+    }
+
+    public function replacementShipped(string $replacementSellerOrderId): void
+    {
+        $request = ReturnRequest::where('replacement_seller_order_id', $replacementSellerOrderId)->first();
+        if ($request) {
+            $this->notify($request, 'replacement_shipped');
+        }
+    }
+
+    protected function notify(ReturnRequest $request, string $event, bool $seller = false): void
+    {
+        $order = $this->orders->forSellerOrder($request->seller_order_id);
+        $email = $seller
+            ? SellerProfile::find($order?->sellerProfileId)?->user?->email
+            : User::find($request->user_id)?->email;
+
+        if ($email) {
+            Mail::to($email)->queue(new ReturnUpdateMail($request, $event, $seller, (string) $order?->orderNumber));
+        }
     }
 
     public function hasOpenReturns(int $userId): bool

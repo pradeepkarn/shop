@@ -630,7 +630,16 @@ class OrderService implements OrderRestockInterface
         $anyCancelled = $sellerOrders->contains(fn (SellerOrder $so) => $so->status->isClosedUndelivered());
         $allDelivered = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isDeliveredToCustomer());
 
-        if ($allCancelled) {
+        // Returns: every package fully refunded, or some refunded with the rest finished (delivered or closed)
+        $allRefunded = $sellerOrders->every(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Refunded);
+        $anyRefunded = $sellerOrders->contains(fn (SellerOrder $so) => $so->status->isRefunded());
+        $allFinished = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isRefunded() || $so->status->isDeliveredToCustomer() || $so->status->isClosedUndelivered());
+
+        if ($allRefunded) {
+            $order->status = OrderStatus::Refunded;
+        } elseif ($anyRefunded && $allFinished) {
+            $order->status = OrderStatus::PartiallyRefunded;
+        } elseif ($allCancelled) {
             $order->status = OrderStatus::Cancelled;
             match ($order->payment_method) {
                 PaymentMethod::CashOnDelivery => $order->payment_status = PaymentStatus::Cancelled,

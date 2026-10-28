@@ -64,11 +64,20 @@ interface SellerLedgerServiceInterface
 
     /**
      * Reverse sale and fees (not forward shipping) for some units of lines, from the original entries, under
-     * {keyPrefix}:{type}:{item} keys. Idempotent. Returns the net amount debited.
+     * {keyPrefix}:{type}:{item} keys. Fees are kept when $reverseFees is false; a partial refund reverses the
+     * ratio share. Idempotent. Returns the net amount debited.
      *
      * @param  array<int, array{units: int, line_qty: int}>  $lines
      */
-    public function recordUnitReversals(SellerOrderSettlement $settlement, array $lines, string $keyPrefix): int;
+    public function recordUnitReversals(SellerOrderSettlement $settlement, array $lines, string $keyPrefix, bool $reverseFees = true, int $ratioNumerator = 1, int $ratioDenominator = 1): int;
+
+    /**
+     * Debit the forward shipping originally allocated to these units x multiplier, under {keyPrefix}{orderItemId}.
+     * Idempotent. Returns the total charged under the prefix.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines
+     */
+    public function recordAllocatedShippingCharge(SellerOrderSettlement $settlement, array $lines, string $keyPrefix, float $multiplier, string $description): int;
 
     /**
      * Compute current balances for a seller.

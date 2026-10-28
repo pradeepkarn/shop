@@ -46,4 +46,23 @@ return [
     */
     'default_return_window_days' => (int) env('RETURNS_DEFAULT_WINDOW_DAYS', 7),
     'claim_window_days' => (int) env('RETURNS_CLAIM_WINDOW_DAYS', 7),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Customer Returns (B6)
+    |--------------------------------------------------------------------------
+    | return_report_days: days after the return parcel reaches the seller to submit a condition report.
+    | return_shipping_multiplier: reverse pickup charged to the seller = forward shipping allocated to the
+    | returned units x this. replacement_shipping_multiplier: same for a replacement or a ship-back to the
+    | customer. commission_on_return: whether the seller's marketplace fees are reversed with the sale,
+    | by fault (keep = the seller still pays them).
+    */
+    'return_report_days' => (int) env('RETURNS_REPORT_DAYS', 3),
+    'return_shipping_multiplier' => (float) env('RETURNS_RETURN_SHIPPING_MULTIPLIER', 1.0),
+    'replacement_shipping_multiplier' => (float) env('RETURNS_REPLACEMENT_SHIPPING_MULTIPLIER', 1.0),
+    'commission_on_return' => [
+        'seller_fault' => 'keep',
+        'customer_remorse' => 'reverse',
+        'courier_fault' => 'reverse',
+    ],
 ];

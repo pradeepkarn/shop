@@ -121,7 +121,7 @@ return [
         'email' => env('SHIPROCKET_EMAIL', ''),
         'password' => env('SHIPROCKET_PASSWORD', ''),
         'webhook_token' => env('SHIPROCKET_WEBHOOK_TOKEN', ''),
-        // Return orders require a pickup_email; customer emails are not on the shipping details, so this contact is used
+        // Return orders require a pickup_email: the customer's account email is used; this contact only when it is missing
         'return_contact_email' => env('SHIPROCKET_RETURN_CONTACT_EMAIL', env('MAIL_FROM_ADDRESS', 'support@example.com')),
         'courier_selection_rule' => env('SHIPROCKET_COURIER_SELECTION', 'recommended'), // 'recommended', 'cheapest', 'fastest', 'specific'
         'specific_courier_id' => env('SHIPROCKET_SPECIFIC_COURIER_ID', null),

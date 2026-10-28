@@ -1,8 +1,17 @@
 <?php
 
+use App\Models\SellerProfile;
+use App\Models\User;
+use App\Orders\Contracts\SellerOrderShippingDetailsLookupInterface;
 use App\Orders\DTOs\SellerOrderInvoiceDto;
 use App\Orders\DTOs\SellerOrderShippingDetailsDto;
 use App\Orders\DTOs\ShippingItemDto;
+use App\Orders\Enums\OrderStatus;
+use App\Orders\Enums\PaymentMethod;
+use App\Orders\Enums\PaymentStatus;
+use App\Orders\Enums\SellerOrderStatus;
+use App\Orders\Models\Order;
+use App\Orders\Models\SellerOrder;
 use App\Shipping\Drivers\EkartCarrierDriver;
 use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use App\Shipping\DTOs\CreateShipmentRequestDto;
@@ -99,4 +108,44 @@ test('shiprocket return pickup creates a return order then a return AWB, and a r
         ->and($order['order_items'][0])->toMatchArray(['sku' => 'SKU-1', 'units' => 2, 'selling_price' => 50.0, 'return_reason' => 'Defective']);
 
     expect($awbs->last()[0]->data())->toBe(['shipment_id' => 777, 'is_return' => 1]);
+});
+
+test('shiprocket return pickup uses the customer account email when the order has one', function () {
+    Http::fake([
+        '*/auth/login' => Http::response(['token' => 'sr-token']),
+        '*/orders/create/return' => Http::response(['order_id' => 1, 'shipment_id' => 2]),
+        '*/courier/assign/awb' => Http::response(['response' => ['data' => ['awb_code' => 'SRRVP1']]]),
+    ]);
+
+    $withEmail = $this->details->forReship([1 => 1], 0, 5000);
+    $withEmail = new SellerOrderShippingDetailsDto(...array_merge(get_object_vars($withEmail), ['customerEmail' => 'asha@example.com']));
+
+    (new ShiprocketCarrierDriver(['base_url' => 'https://apiv2.shiprocket.in/v1/external', 'email' => 'a@b.c', 'password' => 'x', 'safe_mode' => false]))
+        ->createReverseShipment($this->request, $withEmail, $this->invoice, 'Defective');
+
+    expect(Http::recorded(fn (Request $r) => str_contains($r->url(), '/orders/create/return'))->first()[0]->data()['pickup_email'])
+        ->toBe('asha@example.com');
+});
+
+test('the shipping details contract carries the customer account email', function () {
+    $customer = User::factory()->create(['email' => 'buyer@example.com']);
+    $seller = SellerProfile::factory()->approved()->create(['user_id' => User::factory()->create()->id]);
+    $order = Order::create([
+        'order_number' => 'ORD-EMAIL-1', 'user_id' => $customer->id, 'checkout_intent_id' => (string) Str::ulid(),
+        'status' => OrderStatus::Placed,
+        'delivery_address' => ['name' => 'Buyer', 'phone' => '9876543210', 'address_line' => '1 St', 'city' => 'Pune', 'state' => 'Maharashtra', 'pincode' => '411001'],
+        'delivery_state' => 'Maharashtra', 'payment_method' => PaymentMethod::CashOnDelivery,
+        'payment_status' => PaymentStatus::Pending, 'items_mrp_total' => 0, 'discount_total' => 0, 'delivery_fee' => 0,
+        'grand_total' => 0, 'placed_at' => now(),
+    ]);
+    $sellerOrder = SellerOrder::create([
+        'order_id' => $order->id, 'seller_profile_id' => $seller->id, 'seller_store_name' => $seller->store_name,
+        'status' => SellerOrderStatus::Placed, 'subtotal' => 0, 'discount_total' => 0, 'grand_total' => 0, 'placed_at' => now(),
+    ]);
+
+    $details = app(SellerOrderShippingDetailsLookupInterface::class)->getShippingDetails($sellerOrder->id);
+
+    // A ₹0 package (e.g. a replacement) has nothing to collect, so it is not sent as COD
+    expect($details->customerEmail)->toBe('buyer@example.com')
+        ->and($details->isCod)->toBeFalse();
 });

@@ -13,8 +13,9 @@ interface CustomerRefundServiceInterface
      *
      * @param  array<int, int>  $units  order item id => units to refund now
      * @param  bool  $customerPaid  false when the customer was never charged for these units (status not_collected)
+     * @param  int|null  $amountPaise  a smaller amount than the units are worth (partial refund); never more
      */
-    public function createRefund(string $sourceType, string $sourceId, string $sellerOrderId, array $units, bool $customerPaid): CustomerRefundDto;
+    public function createRefund(string $sourceType, string $sourceId, string $sellerOrderId, array $units, bool $customerPaid, ?int $amountPaise = null): CustomerRefundDto;
 
     /**
      * Units of an order item already covered by refunds.

@@ -10,6 +10,8 @@ enum SellerOrderStatus: string
     case Shipped = 'shipped';
     case Delivered = 'delivered';
     case PartiallyDelivered = 'partially_delivered';
+    case PartiallyRefunded = 'partially_refunded';
+    case Refunded = 'refunded';
     case ReturnedToOrigin = 'rto';
     case LostInTransit = 'lost';
     case Cancelled = 'cancelled';
@@ -23,6 +25,8 @@ enum SellerOrderStatus: string
             self::Shipped => 'Shipped',
             self::Delivered => 'Delivered',
             self::PartiallyDelivered => 'Partially Delivered',
+            self::PartiallyRefunded => 'Partially Refunded',
+            self::Refunded => 'Refunded',
             self::ReturnedToOrigin => 'Returned to Origin',
             self::LostInTransit => 'Lost in Transit',
             self::Cancelled => 'Cancelled',
@@ -35,6 +39,14 @@ enum SellerOrderStatus: string
     public function isClosedUndelivered(): bool
     {
         return in_array($this, [self::Cancelled, self::ReturnedToOrigin, self::LostInTransit], true);
+    }
+
+    /**
+     * Some or all units were refunded after a return.
+     */
+    public function isRefunded(): bool
+    {
+        return in_array($this, [self::PartiallyRefunded, self::Refunded], true);
     }
 
     /**

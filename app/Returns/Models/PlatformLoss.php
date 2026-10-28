@@ -25,6 +25,8 @@ class PlatformLoss extends Model
 
     public const TYPE_LOST_SHIPMENT = 'lost_shipment';
 
+    public const TYPE_LOST_RETURN = 'lost_return';
+
     protected $table = 'platform_losses';
 
     protected $fillable = [

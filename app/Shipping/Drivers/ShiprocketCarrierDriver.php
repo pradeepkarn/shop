@@ -429,8 +429,8 @@ class ShiprocketCarrierDriver implements ShippingCarrierInterface
                 'pickup_state' => $details->customerState,
                 'pickup_country' => 'India',
                 'pickup_pincode' => (int) preg_replace('/\D/', '', $details->customerPostalCode),
-                // Required by Shiprocket; the order details carry no customer email, so the platform contact is used
-                'pickup_email' => (string) config('shipping.shiprocket.return_contact_email', config('mail.from.address')),
+                // Required by Shiprocket: the customer's account email, or the platform contact if there is none
+                'pickup_email' => $details->customerEmail ?: (string) config('shipping.shiprocket.return_contact_email', config('mail.from.address')),
                 'pickup_phone' => $customerPhone,
                 'pickup_isd_code' => '91',
                 'shipping_customer_name' => substr($details->sellerStoreName, 0, 100),

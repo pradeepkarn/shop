@@ -7,6 +7,7 @@ use App\Orders\Adapters\OrderCustomerEligibilityAdapter;
 use App\Orders\Contracts\CustomerRefundServiceInterface;
 use App\Orders\Contracts\OrderItemsFeeLookupInterface;
 use App\Orders\Contracts\OrderRestockInterface;
+use App\Orders\Contracts\ReplacementOrderServiceInterface;
 use App\Orders\Contracts\ReturnableOrderLookupInterface;
 use App\Orders\Contracts\SellerOrderFulfillmentInterface;
 use App\Orders\Contracts\SellerOrderReturnWindowLookupInterface;
@@ -15,6 +16,7 @@ use App\Orders\Contracts\SellerOrderStatusLookupInterface;
 use App\Orders\Services\CustomerRefundService;
 use App\Orders\Services\OrderItemsFeeLookupService;
 use App\Orders\Services\OrderService;
+use App\Orders\Services\ReplacementOrderService;
 use App\Orders\Services\ReturnableOrderLookupService;
 use App\Orders\Services\SellerOrderFulfillmentService;
 use App\Orders\Services\SellerOrderReturnWindowLookupService;
@@ -35,6 +37,7 @@ class OrdersServiceProvider extends ServiceProvider
         SellerOrderReturnWindowLookupInterface::class => SellerOrderReturnWindowLookupService::class,
         CustomerRefundServiceInterface::class => CustomerRefundService::class,
         ReturnableOrderLookupInterface::class => ReturnableOrderLookupService::class,
+        ReplacementOrderServiceInterface::class => ReplacementOrderService::class,
         SellerOrderFulfillmentInterface::class => SellerOrderFulfillmentService::class,
         OrderRestockInterface::class => OrderService::class,
         SellerOrderShippingDetailsLookupInterface::class => SellerOrderShippingDetailsLookupService::class,

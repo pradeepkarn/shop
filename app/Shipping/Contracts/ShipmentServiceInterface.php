@@ -35,6 +35,14 @@ interface ShipmentServiceInterface
     public function createReshipBooking(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto;
 
     /**
+     * Ship returned units back to the customer (QC failed): forward, purpose ship_back, nothing collected.
+     * Database only; call bookShipment() after commit.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function createShipBackBooking(string $sellerOrderId, array $units, int $declaredValuePaise): ShipmentSummaryDto;
+
+    /**
      * Return pickup of units from the customer (the order's delivery address) to the seller. Database only; call
      * bookShipment() after commit.
      *

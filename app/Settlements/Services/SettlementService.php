@@ -402,6 +402,63 @@ class SettlementService implements SettlementServiceInterface
         });
     }
 
+    public function settleReturn(string $sellerOrderId, string $returnRequestId, array $lines, array $instructions): int
+    {
+        return DB::transaction(function () use ($sellerOrderId, $returnRequestId, $lines, $instructions) {
+            /** @var SellerOrderSettlement|null $order */
+            $order = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+            if (! $order) {
+                throw new DomainException("Seller order {$sellerOrderId} has no settlement to settle the return against.");
+            }
+
+            /** @var SellerOrderSettlement $settlement */
+            $settlement = SellerOrderSettlement::firstOrCreate(
+                ['seller_order_id' => $sellerOrderId, 'kind' => SellerOrderSettlement::KIND_RETURN, 'reference_id' => $returnRequestId],
+                [
+                    'order_id' => $order->order_id,
+                    'seller_profile_id' => $order->seller_profile_id,
+                    'status' => SettlementStatus::Eligible,
+                    'gross_amount' => 0,
+                    'total_deductions' => 0,
+                    'net_payout' => 0,
+                    'claimable_credits' => 0,
+                    'return_window_days' => $order->return_window_days,
+                ]
+            );
+
+            $unitLines = array_map(fn (array $line) => ['units' => $line['units'], 'line_qty' => $line['line_qty']], $lines);
+            $debit = 0;
+
+            if ($instructions['reverse_sale']) {
+                [$refunded, $refundable] = $instructions['refund_ratio'];
+                foreach ($lines as $orderItemId => $line) {
+                    $debit += $this->ledgerService->recordUnitReversals(
+                        $settlement,
+                        [$orderItemId => $unitLines[$orderItemId]],
+                        "return:{$line['return_item_id']}",
+                        $instructions['reverse_fees'],
+                        $refunded,
+                        $refundable,
+                    );
+                }
+            }
+
+            foreach ($instructions['shipping'] as $charge => $multiplier) {
+                $debit += $this->ledgerService->recordAllocatedShippingCharge(
+                    $settlement,
+                    $unitLines,
+                    "return:{$returnRequestId}:{$charge}:",
+                    (float) $multiplier,
+                    ucfirst(str_replace('_', ' ', $charge))." for returned units (multiplier {$multiplier})",
+                );
+            }
+
+            $settlement->update(['total_deductions' => $debit, 'net_payout' => -$debit, 'status' => SettlementStatus::Eligible]);
+
+            return $debit;
+        });
+    }
+
     public function releaseMaturedSettlements(): int
     {
         // hold_until is stored in app time (UTC); an IST-zoned "now" would be bound as IST wall-clock

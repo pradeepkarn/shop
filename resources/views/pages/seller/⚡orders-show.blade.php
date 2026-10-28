@@ -52,6 +52,13 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
 
     public array $rtoPhotos = [];
 
+    // Customer return condition report
+    public string $returnCondition = 'intact';
+
+    public string $returnNotes = '';
+
+    public array $returnPhotos = [];
+
     public function mount(string $sellerOrder): void
     {
         $this->sellerOrderId = $sellerOrder;
@@ -285,6 +292,31 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
             session()->flash('order_success', "Warehouse registered with carrier (Alias: {$res->alias}).");
         } else {
             session()->flash('order_error', 'Warehouse registration failed: '.$res->message);
+        }
+    }
+
+    public function submitReturnReport(string $returnRequestId, \App\Returns\Contracts\ReturnRequestServiceInterface $returns): void
+    {
+        $order = $this->order;
+        if (! $order) {
+            return;
+        }
+
+        $this->authorize('update', $order);
+
+        $this->validate([
+            'returnCondition' => ['required', 'in:intact,damaged,wrong_item,incomplete'],
+            'returnNotes' => ['nullable', 'string', 'max:1000'],
+            'returnPhotos' => ['nullable', 'array', 'max:5'],
+            'returnPhotos.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        try {
+            $returns->submitSellerReport($returnRequestId, (int) $order->seller_profile_id, $this->returnCondition, $this->returnNotes, $this->returnPhotos);
+            session()->flash('order_success', 'Return condition report submitted.');
+            $this->reset(['returnNotes', 'returnPhotos']);
+        } catch (\Throwable $e) {
+            session()->flash('order_error', 'Submission failed: '.$e->getMessage());
         }
     }
 
@@ -635,6 +667,68 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                     Cancel
                 </button>
             </div>
+        </div>
+    @endif
+
+    <!-- Customer Returns (read-only for the seller; condition report once received) -->
+    @php
+        $packageReturns = \App\Returns\Models\ReturnRequest::with('items')->where('seller_order_id', $sellerOrder->id)->latest()->get();
+    @endphp
+    @if ($packageReturns->isNotEmpty())
+        <div data-test="seller-returns-card" class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
+            <h3 class="text-sm font-bold text-zinc-900 dark:text-white">Customer returns</h3>
+
+            @foreach ($packageReturns as $return)
+                <div data-test="seller-return-{{ $return->id }}" class="rounded-xl bg-zinc-50 p-4 text-xs dark:bg-zinc-800/60 space-y-2">
+                    <div class="flex justify-between gap-2">
+                        <div>
+                            <span class="font-bold text-zinc-900 dark:text-white">{{ $return->reason->label() }}</span>
+                            <p class="text-zinc-600 dark:text-zinc-300">
+                                @foreach ($return->items as $line)
+                                    {{ $sellerOrder->items->firstWhere('id', $line->order_item_id)?->title }} &times; {{ $line->units }}@if (! $loop->last), @endif
+                                @endforeach
+                            </p>
+                            @if ($return->customer_notes)<p class="text-zinc-500">“{{ $return->customer_notes }}”</p>@endif
+                        </div>
+                        <span class="h-fit rounded-lg bg-zinc-200 px-2 py-0.5 font-bold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">{{ $return->status->label() }}</span>
+                    </div>
+
+                    @if (! empty($return->photos))
+                        <div class="flex flex-wrap gap-2">
+                            @foreach ($return->photos as $index => $photo)
+                                <img src="{{ route('seller.returns.request-photo', ['request' => $return->id, 'kind' => 'customer', 'index' => $index]) }}" alt="Customer photo" class="size-14 rounded-lg object-cover border border-zinc-200" />
+                            @endforeach
+                        </div>
+                    @endif
+
+                    @if ($return->seller_reported_at)
+                        <p data-test="seller-return-report">Your report: <strong>{{ str_replace('_', ' ', $return->seller_condition) }}</strong>{{ $return->seller_report_notes ? ' — '.$return->seller_report_notes : '' }} (@datetime($return->seller_reported_at))</p>
+                    @elseif ($return->status === \App\Returns\Enums\ReturnRequestStatus::Received)
+                        @if ($return->sellerReportMissed())
+                            <p data-test="seller-return-report-missed" class="font-semibold text-red-600">The report deadline (@datetime($return->report_deadline_at)) has passed; the marketplace will decide without it.</p>
+                        @else
+                            <form wire:submit.prevent="submitReturnReport('{{ $return->id }}')" class="space-y-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+                                <p>The return reached you. Report its condition by <strong data-test="return-report-deadline">@datetime($return->report_deadline_at)</strong>.</p>
+                                <select wire:model="returnCondition" class="w-full rounded-lg border border-zinc-300 bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
+                                    <option value="intact">Intact / resalable</option>
+                                    <option value="damaged">Damaged</option>
+                                    <option value="wrong_item">Wrong item returned</option>
+                                    <option value="incomplete">Incomplete / missing parts</option>
+                                </select>
+                                <textarea wire:model="returnNotes" rows="2" placeholder="What you found" class="w-full rounded-lg border border-zinc-300 bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"></textarea>
+                                <input type="file" wire:model="returnPhotos" multiple accept="image/jpeg,image/png,image/webp" class="w-full" />
+                                @error('returnPhotos') <p class="text-red-600">{{ $message }}</p> @enderror
+                                @error('returnPhotos.*') <p class="text-red-600">{{ $message }}</p> @enderror
+                                <button type="submit" data-test="submit-return-report-btn" class="rounded-lg bg-zinc-900 px-4 py-2 font-bold text-white dark:bg-white dark:text-zinc-900">Submit condition report</button>
+                            </form>
+                        @endif
+                    @endif
+
+                    @if ($return->qc_result)
+                        <p data-test="seller-return-qc">QC {{ $return->qc_result }} &middot; outcome: {{ str_replace('_', ' ', $return->qc_outcome) }}</p>
+                    @endif
+                </div>
+            @endforeach
         </div>
     @endif
 

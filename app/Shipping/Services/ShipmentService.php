@@ -234,6 +234,15 @@ class ShipmentService implements ShipmentServiceInterface
         ]);
     }
 
+    public function createShipBackBooking(string $sellerOrderId, array $units, int $declaredValuePaise): ShipmentSummaryDto
+    {
+        return $this->createPendingBooking($this->originalShipmentFor($sellerOrderId), ShipmentPurpose::ShipBack, $units, [
+            'is_cod' => false,
+            'cod_amount_paise' => 0,
+            'declared_value_paise' => $declaredValuePaise,
+        ]);
+    }
+
     public function createReturnPickupBooking(string $sellerOrderId, array $units, int $declaredValuePaise, string $returnReason): ShipmentSummaryDto
     {
         $parent = $this->originalShipmentFor($sellerOrderId);
@@ -452,6 +461,11 @@ class ShipmentService implements ShipmentServiceInterface
                 return;
             }
 
+            // Any other secondary shipment (e.g. a ship-back) never reverts the delivered order
+            if ($shipment->purpose !== ShipmentPurpose::Original) {
+                return;
+            }
+
             // Revert seller order to Packed (shipment cancellation only cancels shipment)
             $this->orderFulfillment->revertToPacked(
                 sellerOrderId: $shipment->seller_order_id,
@@ -554,8 +568,9 @@ class ShipmentService implements ShipmentServiceInterface
                 return $event;
             }
 
-            // A reship carries only some units of an already partially delivered order; Returns handles its outcome
-            if ($shipment->purpose === ShipmentPurpose::Reship) {
+            // Reships and ship-backs carry only some units of an order that already reached the customer;
+            // they never change the order status (Returns handles their outcome)
+            if ($shipment->purpose !== ShipmentPurpose::Original) {
                 $this->applyReshipCourierEvent($shipment, $trackingDto, $updates);
 
                 return $event;
@@ -650,17 +665,20 @@ class ShipmentService implements ShipmentServiceInterface
             $shipmentId = (string) $shipment->id;
             $sellerOrderId = (string) $shipment->seller_order_id;
 
-            match ($status) {
-                ShipmentStatus::Delivered => event(new ShipmentReshipDelivered($shipmentId, $sellerOrderId, Carbon::parse($updates['delivered_at'] ?? $shipment->delivered_at ?? now())->toIso8601String())),
-                ShipmentStatus::RtoDelivered => event(new ShipmentReshipReturned($shipmentId, $sellerOrderId, $trackingDto->description)),
-                ShipmentStatus::DeliveryFailed => event(new ShipmentDeliveryFailed(
+            $isReship = $shipment->purpose === ShipmentPurpose::Reship;
+
+            match (true) {
+                ! $isReship => null,
+                $status === ShipmentStatus::Delivered => event(new ShipmentReshipDelivered($shipmentId, $sellerOrderId, Carbon::parse($updates['delivered_at'] ?? $shipment->delivered_at ?? now())->toIso8601String())),
+                $status === ShipmentStatus::RtoDelivered => event(new ShipmentReshipReturned($shipmentId, $sellerOrderId, $trackingDto->description)),
+                $status === ShipmentStatus::DeliveryFailed => event(new ShipmentDeliveryFailed(
                     shipmentId: $shipmentId,
                     sellerOrderId: $sellerOrderId,
                     attemptCount: (int) $updates['ndr_attempt_count'],
                     reason: $updates['latest_ndr_reason'],
                 )),
                 // Lost: the admin confirms it through the lost flow, which knows this is a reship
-                ShipmentStatus::Lost => event(new ShipmentLost($shipmentId, $sellerOrderId, $trackingDto->description)),
+                $status === ShipmentStatus::Lost => event(new ShipmentLost($shipmentId, $sellerOrderId, $trackingDto->description)),
                 default => null,
             };
         });

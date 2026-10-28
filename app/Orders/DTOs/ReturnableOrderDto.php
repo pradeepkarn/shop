@@ -18,5 +18,6 @@ final readonly class ReturnableOrderDto
         public SellerOrderStatus $status,
         public ?DateTimeInterface $deliveredAt,
         public array $items,
+        public int $sellerProfileId = 0,
     ) {}
 }

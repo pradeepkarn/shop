@@ -16,6 +16,9 @@ enum ShipmentPurpose: string
     /** Forward shipment of a replacement order. */
     case Replacement = 'replacement';
 
+    /** A returned item that failed QC, sent back to the customer at the seller's cost. */
+    case ShipBack = 'ship_back';
+
     public function direction(): ShipmentDirection
     {
         return $this === self::CustomerReturn ? ShipmentDirection::Reverse : ShipmentDirection::Forward;
@@ -28,6 +31,7 @@ enum ShipmentPurpose: string
             self::Reship => 'Reship',
             self::CustomerReturn => 'Customer Return',
             self::Replacement => 'Replacement',
+            self::ShipBack => 'Ship Back to Customer',
         };
     }
 }

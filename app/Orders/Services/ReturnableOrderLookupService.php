@@ -48,6 +48,7 @@ class ReturnableOrderLookupService implements ReturnableOrderLookupInterface
             status: $sellerOrder->status,
             deliveredAt: $sellerOrder->delivered_at,
             items: $items,
+            sellerProfileId: (int) $sellerOrder->seller_profile_id,
         );
     }
 }

@@ -28,13 +28,13 @@ class CustomerRefundService implements CustomerRefundServiceInterface
         protected CouponRedemptionInterface $couponRedemption,
     ) {}
 
-    public function createRefund(string $sourceType, string $sourceId, string $sellerOrderId, array $units, bool $customerPaid): CustomerRefundDto
+    public function createRefund(string $sourceType, string $sourceId, string $sellerOrderId, array $units, bool $customerPaid, ?int $amountPaise = null): CustomerRefundDto
     {
         if ($sourceType === '' || $sourceId === '' || $units === []) {
             throw new DomainException('A refund needs a source and at least one item.');
         }
 
-        return DB::transaction(function () use ($sourceType, $sourceId, $sellerOrderId, $units, $customerPaid) {
+        return DB::transaction(function () use ($sourceType, $sourceId, $sellerOrderId, $units, $customerPaid, $amountPaise) {
             if (CustomerRefund::where('source_type', $sourceType)->where('source_id', $sourceId)->exists()) {
                 throw new DomainException("A refund already exists for {$sourceType} {$sourceId}.");
             }
@@ -78,6 +78,14 @@ class CustomerRefundService implements CustomerRefundServiceInterface
             }
 
             $total = array_sum(array_map(fn ($line) => $line['amount']->amountPaise, $lines));
+
+            // An admin may refund less than the units are worth (e.g. QC failed); never more
+            if ($amountPaise !== null) {
+                if ($amountPaise < 1 || $amountPaise > $total) {
+                    throw new DomainException('The refund must be between ₹0.01 and ₹'.number_format($total / 100, 2).'.');
+                }
+                $total = $amountPaise;
+            }
 
             /** @var CustomerRefund $refund */
             $refund = CustomerRefund::create([

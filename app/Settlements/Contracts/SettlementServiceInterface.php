@@ -94,6 +94,19 @@ interface SettlementServiceInterface
     public function reverseUnitsForReturnClaim(string $sellerOrderId, string $returnRequestId, array $lines): int;
 
     /**
+     * Settle a decided customer return in its return settlement (kind return, keyed by the request), eligible so a
+     * negative balance is carried into the seller's next payout even if the order was already paid out:
+     *  - reverse_sale: per-unit sale reversal under return:{returnItemId}:{type}:{item} keys, fees too when
+     *    reverse_fees, scaled by refund_ratio [refunded, refundable] for a partial refund;
+     *  - shipping: charge key => multiplier, each charging the forward shipping allocated to the units x multiplier.
+     * Returns the total debited.
+     *
+     * @param  array<int, array{units: int, line_qty: int, return_item_id: int}>  $lines
+     * @param  array{reverse_sale: bool, reverse_fees: bool, refund_ratio: array{0: int, 1: int}, shipping: array<string, float>}  $instructions
+     */
+    public function settleReturn(string $sellerOrderId, string $returnRequestId, array $lines, array $instructions): int;
+
+    /**
      * Release all matured on_hold settlements whose return window has passed.
      */
     public function releaseMaturedSettlements(): int;

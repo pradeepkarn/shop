@@ -41,6 +41,17 @@ enum ReturnReason: string
     }
 
     /**
+     * Default fault for the reason: problems with what was sent are the seller's; the rest is customer remorse.
+     */
+    public function fault(): ReturnFault
+    {
+        return match ($this) {
+            self::Damaged, self::Defective, self::WrongItem, self::MissingItem, self::NotAsDescribed => ReturnFault::SellerFault,
+            self::SizeFit, self::Quality, self::ChangedMind => ReturnFault::CustomerRemorse,
+        };
+    }
+
+    /**
      * Missing items are not picked up: the admin decides refund or reship directly.
      */
     public function needsPickup(): bool

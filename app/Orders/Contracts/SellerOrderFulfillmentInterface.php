@@ -72,6 +72,11 @@ interface SellerOrderFulfillmentInterface
     public function recordReshipDelivered(string $sellerOrderId, int $codCollectedPaise, bool $allItemsDelivered): void;
 
     /**
+     * After a return refund: the seller order becomes Partially Refunded, or Refunded once every unit is refunded.
+     */
+    public function recordReturnRefund(string $sellerOrderId): void;
+
+    /**
      * Mark the seller order as Partial Delivered.
      */
     public function markPartialDelivered(

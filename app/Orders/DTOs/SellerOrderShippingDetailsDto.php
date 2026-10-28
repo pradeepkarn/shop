@@ -33,6 +33,7 @@ final readonly class SellerOrderShippingDetailsDto
         public int $grandTotalPaise,
         public array $items,
         public int $estimatedTotalWeightGrams,
+        public ?string $customerEmail = null,
     ) {}
 
     /**
@@ -93,6 +94,7 @@ final readonly class SellerOrderShippingDetailsDto
             grandTotalPaise: $declaredValuePaise,
             items: $items,
             estimatedTotalWeightGrams: (int) array_sum(array_map(fn (ShippingItemDto $i) => $i->weightGrams * $i->quantity, $items)),
+            customerEmail: $this->customerEmail,
         );
     }
 }

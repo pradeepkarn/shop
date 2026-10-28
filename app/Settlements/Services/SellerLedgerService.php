@@ -293,31 +293,40 @@ class SellerLedgerService implements SellerLedgerServiceInterface
 
     public function recordReshipShippingCharge(SellerOrderSettlement $reship, array $lines, float $multiplier): int
     {
-        $prefix = "reship:{$reship->reference_id}:shipping_fee:";
+        return $this->recordAllocatedShippingCharge(
+            $reship,
+            $lines,
+            "reship:{$reship->reference_id}:shipping_fee:",
+            $multiplier,
+            "Reship shipping for undelivered units (multiplier {$multiplier})",
+        );
+    }
 
-        DB::transaction(function () use ($reship, $lines, $multiplier, $prefix) {
+    public function recordAllocatedShippingCharge(SellerOrderSettlement $settlement, array $lines, string $keyPrefix, float $multiplier, string $description): int
+    {
+        DB::transaction(function () use ($settlement, $lines, $multiplier, $keyPrefix, $description) {
             foreach ($lines as $orderItemId => $line) {
-                // The forward shipping originally allocated to this line, for the reshipped units only
-                $original = (int) SellerLedgerEntry::where('source_key', "settlement:{$reship->seller_order_id}:shipping_fee:{$orderItemId}")->value('amount');
+                // The forward shipping originally allocated to this line, for these units only
+                $original = (int) SellerLedgerEntry::where('source_key', "settlement:{$settlement->seller_order_id}:shipping_fee:{$orderItemId}")->value('amount');
                 $charge = (int) round(abs(self::scaleToUnits($original, $line['units'], $line['line_qty'])) * $multiplier);
 
                 if ($charge > 0) {
                     $this->createEntryIfNotExists([
-                        'seller_profile_id' => $reship->seller_profile_id,
-                        'seller_order_id' => $reship->seller_order_id,
+                        'seller_profile_id' => $settlement->seller_profile_id,
+                        'seller_order_id' => $settlement->seller_order_id,
                         'order_item_id' => $orderItemId,
                         'payout_id' => null,
                         'type' => LedgerEntryType::ShippingFee,
                         'amount' => -$charge,
-                        'description' => "Reship shipping for undelivered units ({$line['units']}, multiplier {$multiplier})",
-                        'source_key' => $prefix.$orderItemId,
+                        'description' => "{$description} ({$line['units']} unit(s))",
+                        'source_key' => $keyPrefix.$orderItemId,
                         'created_at' => CarbonImmutable::now(),
                     ]);
                 }
             }
         });
 
-        return (int) -SellerLedgerEntry::where('source_key', 'like', $prefix.'%')->sum('amount');
+        return (int) -SellerLedgerEntry::where('source_key', 'like', $keyPrefix.'%')->sum('amount');
     }
 
     public function recordReshipCredits(SellerOrderSettlement $reship, array $lines): array
@@ -410,11 +419,13 @@ class SellerLedgerService implements SellerLedgerServiceInterface
         return (int) -$charges->sum('amount');
     }
 
-    public function recordUnitReversals(SellerOrderSettlement $settlement, array $lines, string $keyPrefix): int
+    public function recordUnitReversals(SellerOrderSettlement $settlement, array $lines, string $keyPrefix, bool $reverseFees = true, int $ratioNumerator = 1, int $ratioDenominator = 1): int
     {
         $originalPrefix = "settlement:{$settlement->seller_order_id}:";
+        // Marketplace fees the seller keeps paying when the fault is theirs (sale and its taxes are always reversed)
+        $feeTypes = [LedgerEntryType::Commission, LedgerEntryType::ClosingFee, LedgerEntryType::CollectionFee, LedgerEntryType::GstOnFees];
 
-        DB::transaction(function () use ($settlement, $lines, $keyPrefix, $originalPrefix) {
+        DB::transaction(function () use ($settlement, $lines, $keyPrefix, $originalPrefix, $reverseFees, $feeTypes, $ratioNumerator, $ratioDenominator) {
             $originals = SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
                 ->whereIn('order_item_id', array_keys($lines))
                 ->where('source_key', 'like', $originalPrefix.'%')
@@ -427,7 +438,16 @@ class SellerLedgerService implements SellerLedgerServiceInterface
                 ->get();
 
             foreach ($originals as $entry) {
+                if (! $reverseFees && in_array($entry->type, $feeTypes, true)) {
+                    continue;
+                }
+
                 $line = $lines[(int) $entry->order_item_id];
+                $unitsAmount = self::scaleToUnits($entry->amount, $line['units'], $line['line_qty']);
+                // A partial refund gives back the same share of the sale (and fees)
+                $amount = $ratioDenominator > 0 && $ratioNumerator < $ratioDenominator
+                    ? intdiv($unitsAmount * $ratioNumerator, $ratioDenominator)
+                    : $unitsAmount;
 
                 $this->createEntryIfNotExists([
                     'seller_profile_id' => $entry->seller_profile_id,
@@ -435,7 +455,7 @@ class SellerLedgerService implements SellerLedgerServiceInterface
                     'order_item_id' => $entry->order_item_id,
                     'payout_id' => null,
                     'type' => LedgerEntryType::Reversal,
-                    'amount' => -self::scaleToUnits($entry->amount, $line['units'], $line['line_qty']),
+                    'amount' => -$amount,
                     'description' => "Reversal ({$line['units']} unit(s) returned or missing): {$entry->description}",
                     'source_key' => "{$keyPrefix}:".substr($entry->source_key, strlen($originalPrefix)),
                     'created_at' => CarbonImmutable::now(),

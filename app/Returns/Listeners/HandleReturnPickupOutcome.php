@@ -2,7 +2,9 @@
 
 namespace App\Returns\Listeners;
 
+use App\Orders\Events\SellerOrderShipped;
 use App\Returns\Contracts\ReturnRequestServiceInterface;
+use App\Shipping\Events\ShipmentReturnLost;
 use App\Shipping\Events\ShipmentReturnPickupCancelled;
 use App\Shipping\Events\ShipmentReturnReceived;
 
@@ -24,5 +26,18 @@ class HandleReturnPickupOutcome
     public function received(ShipmentReturnReceived $event): void
     {
         $this->returns->pickupReceived($event->shipmentId);
+    }
+
+    public function lost(ShipmentReturnLost $event): void
+    {
+        $this->returns->pickupLost($event->shipmentId);
+    }
+
+    /**
+     * Any seller order shipped: if it is a replacement, the customer hears about it.
+     */
+    public function replacementShipped(SellerOrderShipped $event): void
+    {
+        $this->returns->replacementShipped($event->sellerOrderId);
     }
 }

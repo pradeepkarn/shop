@@ -109,6 +109,29 @@ the queue; a cancelled return pickup closes the return request).
   separate `return` settlement, carried into the next payout) and hands them to the B4 refund/reship
   queue with `customer_paid = true` (refund pending, or reship collecting nothing).
 
+## B6: received, QC, refund or replacement
+
+- Return parcel delivered to the seller → request `received`; the seller submits a condition report
+  (notes + up to 5 JPG/PNG/WebP photos, private disk, own packages, read-only) within
+  `returns.return_report_days` (default 3, shown in India time). Missed → flagged; admin decides without it.
+- Admin QC (returns.manage, confirmation, logged, once): **pass** → restock, then refund or replacement per
+  the customer's choice; **fail** → ship back to the customer (seller pays), partial refund (≤ refundable) or
+  full refund; no restock.
+- Refund: B3 per-unit amount after coupon; COD → pending, paid manually with UTR; coupon units released.
+- Settlement (separate `return` settlement per request, eligible, so a paid-out seller carries the negative):
+  per-unit sale reversal under `return:{returnItem}:{type}:{item}` (partial refund = same share); fees by
+  `returns.commission_on_return` (seller_fault keeps them; customer_remorse and courier_fault reverse them);
+  return shipping = forward allocated shipping × `returns.return_shipping_multiplier`; replacement and
+  ship-back shipping × `returns.replacement_shipping_multiplier`. Return hold released on resolution.
+- Replacement: linked ₹0 seller order (same listing and delivery address snapshot, no fees) through the
+  normal forward flow; stock reserved; out of stock / inactive → converted to refund (customer notified);
+  a replacement can only be returned for a refund.
+- Lost return pickup (after pickup): customer refunded in full; seller's sale not reversed; platform loss
+  (`lost_return`) and courier claim recorded.
+- Seller order → `partially_refunded` / `refunded` (parent rollup likewise).
+- Emails: customer (QC result, converted to refund, replacement shipped, lost return, refund paid/failed);
+  seller (return received, QC result).
+
 ## Chunks
 
 - B2: shipment direction/purpose/items; reverse lifecycle; Fake reverse toolbar. (done)

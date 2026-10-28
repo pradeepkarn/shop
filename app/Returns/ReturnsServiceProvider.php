@@ -2,6 +2,7 @@
 
 namespace App\Returns;
 
+use App\Orders\Events\SellerOrderShipped;
 use App\Returns\Contracts\CourierClaimServiceInterface;
 use App\Returns\Contracts\ReturnRequestServiceInterface;
 use App\Returns\Contracts\ReturnsLookupInterface;
@@ -19,6 +20,7 @@ use App\Returns\Services\UndeliveredItemService;
 use App\Shipping\Events\ShipmentReshipCancelled;
 use App\Shipping\Events\ShipmentReshipDelivered;
 use App\Shipping\Events\ShipmentReshipReturned;
+use App\Shipping\Events\ShipmentReturnLost;
 use App\Shipping\Events\ShipmentReturnPickupCancelled;
 use App\Shipping\Events\ShipmentReturnReceived;
 use Illuminate\Support\Facades\Event;
@@ -50,5 +52,7 @@ class ReturnsServiceProvider extends ServiceProvider
         Event::listen(ShipmentReshipCancelled::class, [HandleReshipOutcome::class, 'cancelled']);
         Event::listen(ShipmentReturnPickupCancelled::class, [HandleReturnPickupOutcome::class, 'cancelled']);
         Event::listen(ShipmentReturnReceived::class, [HandleReturnPickupOutcome::class, 'received']);
+        Event::listen(ShipmentReturnLost::class, [HandleReturnPickupOutcome::class, 'lost']);
+        Event::listen(SellerOrderShipped::class, [HandleReturnPickupOutcome::class, 'replacementShipped']);
     }
 }

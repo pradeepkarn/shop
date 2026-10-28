@@ -30,6 +30,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $shipped_at
  * @property Carbon|null $delivered_at
  * @property Carbon|null $rto_delivered_at
+ * @property string|null $replacement_of_return_request_id
  * @property int|null $expected_cod_amount_paise COD to collect when only some items were delivered; null = full grand_total
  * @property Carbon|null $cancelled_at
  * @property string|null $cancellation_reason
@@ -69,6 +70,7 @@ class SellerOrder extends Model
         'delivered_at',
         'rto_delivered_at',
         'expected_cod_amount_paise',
+        'replacement_of_return_request_id',
         'cancelled_at',
         'cancellation_reason',
         'cancelled_by_type',

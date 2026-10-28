@@ -11,7 +11,10 @@ use App\Orders\Enums\OrderStatus;
 use App\Orders\Enums\PaymentMethod;
 use App\Orders\Enums\PaymentStatus;
 use App\Orders\Models\Order;
+use App\Returns\Enums\ReturnReason;
+use App\Returns\Enums\ReturnRequestStatus;
 use App\Returns\Enums\RtoConditionStatus;
+use App\Returns\Models\ReturnRequest;
 use App\Returns\Models\RtoIntakeReport;
 use App\Shared\Enums\FeeScheduleStatus;
 use App\Shipping\Enums\ShipmentStatus;
@@ -30,6 +33,23 @@ beforeEach(function () {
 function getRouteParam(string $routeName): array
 {
     return match ($routeName) {
+        'admin.returns.request-photo' => [
+            'request' => (function () {
+                Storage::disk('local')->put('return_photos/rbac-test/photo.jpg', 'jpeg bytes');
+
+                return ReturnRequest::create([
+                    'order_id' => (string) Str::ulid(),
+                    'seller_order_id' => (string) Str::ulid(),
+                    'user_id' => User::factory()->create()->id,
+                    'reason' => ReturnReason::Damaged,
+                    'preference' => ReturnRequest::PREFERENCE_REFUND,
+                    'status' => ReturnRequestStatus::Requested,
+                    'photos' => ['return_photos/rbac-test/photo.jpg'],
+                ]);
+            })(),
+            'kind' => 'customer',
+            'index' => 0,
+        ],
         'admin.returns.rto-photo' => [
             'report' => (function () {
                 Storage::disk('local')->put('rto_photos/rbac-test/photo.jpg', 'jpeg bytes');
@@ -185,6 +205,7 @@ dataset('admin_protected_routes', [
     ['admin.returns.index', AdminPermissions::RETURNS_VIEW],
     ['admin.returns.rto-photo', AdminPermissions::RETURNS_VIEW],
     ['admin.refunds.index', AdminPermissions::RETURNS_VIEW],
+    ['admin.returns.request-photo', AdminPermissions::RETURNS_VIEW],
     ['admin.settings.branding', AdminPermissions::BRANDING_VIEW],
 ]);
 
