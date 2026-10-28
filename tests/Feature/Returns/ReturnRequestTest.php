@@ -134,6 +134,7 @@ beforeEach(function () {
         units: $units,
         photos: $photos,
         overrideByAdminId: $override,
+        overrideReason: $override ? 'Customer was travelling' : null,
     );
     $this->queue = fn () => Livewire::actingAs($this->admin, 'admin')->test('pages::admin.returns-index');
     $this->simulate = function (string $shipmentId, array $steps) {
@@ -165,7 +166,10 @@ test('after the window it is blocked unless an admin overrides, which is logged'
 
     $request = ($this->request)([$this->toy->id => 1], override: $this->admin->id);
     expect($request->window_override_by_admin_id)->toBe($this->admin->id)
-        ->and(AdminActivityLog::where('action', 'returns.window_override')->where('admin_id', $this->admin->id)->exists())->toBeTrue();
+        ->and(AdminActivityLog::where('action', 'returns.window_override')->where('admin_id', $this->admin->id)->sole()->properties['reason'])->toBe('Customer was travelling');
+
+    expect(fn () => $this->returns->create($this->customer->id, $this->sellerOrder->id, ReturnReason::SizeFit, ReturnRequest::PREFERENCE_REFUND, [$this->toy->id => 1], overrideByAdminId: $this->admin->id))
+        ->toThrow(DomainException::class, 'Give a reason');
 });
 
 test('non-returnable verticals only accept damaged, defective, wrong or missing claims', function () {

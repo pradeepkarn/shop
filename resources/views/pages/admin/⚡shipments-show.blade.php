@@ -426,6 +426,11 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                     @if ($shipmentModel->parent_shipment_id)
                         &bull; <a href="{{ route('admin.shipments.show', ['shipment' => $shipmentModel->parent_shipment_id]) }}" wire:navigate class="underline">Parent shipment</a>
                     @endif
+                    @if (in_array($shipmentModel->purpose, [\App\Shipping\Enums\ShipmentPurpose::CustomerReturn, \App\Shipping\Enums\ShipmentPurpose::ShipBack], true))
+                        @can('returns.view')
+                            &bull; <a href="{{ route('admin.returns.index', ['sellerOrder' => $shipmentModel->seller_order_id, 'status' => 'all']) }}" wire:navigate data-test="shipment-return-request-link" class="font-semibold text-indigo-600 underline dark:text-indigo-400">Return request</a>
+                        @endcan
+                    @endif
             </p>
         </div>
 

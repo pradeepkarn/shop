@@ -105,7 +105,12 @@ class ReturnRequestService implements ReturnRequestServiceInterface
         array $photos = [],
         ?string $notes = null,
         ?int $overrideByAdminId = null,
+        ?string $overrideReason = null,
     ): ReturnRequest {
+        if ($overrideByAdminId && trim((string) $overrideReason) === '') {
+            throw new DomainException('Give a reason for creating this return outside the normal rules.');
+        }
+
         $order = $this->orders->forSellerOrder($sellerOrderId);
         if (! $order || $order->userId !== $userId) {
             throw new DomainException('This order does not belong to you.');
@@ -217,6 +222,7 @@ class ReturnRequestService implements ReturnRequestServiceInterface
                 'seller_order_id' => $sellerOrderId,
                 'units' => $units,
                 'deadline' => $request->return_deadline_at?->toIso8601String(),
+                'reason' => trim((string) $overrideReason),
             ], Admin::find($overrideByAdminId));
         }
 
@@ -242,23 +248,45 @@ class ReturnRequestService implements ReturnRequestServiceInterface
         });
     }
 
-    public function respond(string $returnRequestId, int $userId, string $response): ReturnRequest
+    public function respond(string $returnRequestId, int $userId, string $response, array $photos = []): ReturnRequest
     {
         $response = trim($response);
         if ($response === '') {
             throw new DomainException('Add your answer before sending.');
         }
 
-        return DB::transaction(function () use ($returnRequestId, $userId, $response) {
-            $request = $this->lockInStatus($returnRequestId, [ReturnRequestStatus::InfoRequested]);
-            if ($request->user_id !== $userId) {
-                throw new DomainException('This return does not belong to you.');
-            }
+        Validator::make(['photos' => $photos], [
+            'photos' => ['array', 'max:5'],
+            'photos.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ])->validate();
 
-            $request->update(['status' => ReturnRequestStatus::Requested, 'customer_response' => $response]);
+        $stored = array_map(fn ($photo) => $photo->store("return_photos/{$returnRequestId}", 'local'), $photos);
 
-            return $request->fresh();
-        });
+        try {
+            return DB::transaction(function () use ($returnRequestId, $userId, $response, $stored) {
+                $request = $this->lockInStatus($returnRequestId, [ReturnRequestStatus::InfoRequested]);
+                if ($request->user_id !== $userId) {
+                    throw new DomainException('This return does not belong to you.');
+                }
+
+                $allPhotos = array_merge($request->photos ?? [], $stored);
+                if (count($allPhotos) > 5) {
+                    throw new DomainException('A return can have at most 5 photos.');
+                }
+
+                $request->update([
+                    'status' => ReturnRequestStatus::Requested,
+                    'customer_response' => $response,
+                    'photos' => $allPhotos,
+                ]);
+
+                return $request->fresh();
+            });
+        } catch (\Throwable $e) {
+            Storage::disk('local')->delete($stored);
+
+            throw $e;
+        }
     }
 
     public function approve(string $returnRequestId, int $adminId): ReturnRequest
@@ -454,8 +482,11 @@ class ReturnRequestService implements ReturnRequestServiceInterface
             $lines = $request->items->mapWithKeys(fn (ReturnRequestItem $item) => [
                 $item->order_item_id => ['units' => $item->units, 'line_qty' => $item->line_qty, 'return_item_id' => $item->id],
             ])->all();
-            // A failed check is the customer's doing unless the admin says otherwise
+            // On pass the fault follows the reason unless the admin says otherwise. On a failed check a refund is a
+            // platform goodwill gesture unless the admin explicitly blames the seller.
+            $sellerBlamed = $fault === ReturnFault::SellerFault;
             $fault ??= $passed ? $request->reason->fault() : ReturnFault::CustomerRemorse;
+            $goodwill = false;
             // The seller pays the return pickup in every case
             $shipping = ['return_shipping' => (float) config('returns.return_shipping_multiplier', 1.0)];
             $replacementMultiplier = (float) config('returns.replacement_shipping_multiplier', 1.0);
@@ -504,8 +535,23 @@ class ReturnRequestService implements ReturnRequestServiceInterface
                     }
 
                     $refund = $this->refunds->createRefund(ReturnRequest::REFUND_SOURCE, $request->id, $sellerOrderId, $units, true, $amount);
-                    $reverseSale = true;
-                    $ratio = $amount !== null ? [$amount, $value] : [1, 1];
+
+                    if ($sellerBlamed) {
+                        $reverseSale = true;
+                        $ratio = $amount !== null ? [$amount, $value] : [1, 1];
+                    } else {
+                        // Goodwill: the seller keeps the sale and fees; the platform absorbs the refund
+                        $goodwill = true;
+                        PlatformLoss::create([
+                            'loss_type' => PlatformLoss::TYPE_GOODWILL_REFUND,
+                            'seller_order_id' => $sellerOrderId,
+                            'shipment_id' => (string) $request->reverse_shipment_id,
+                            'loss_amount_paise' => $refund->amountPaise,
+                            'declared_value_paise' => $value,
+                            'admin_id' => $adminId,
+                            'notes' => $notes ?? 'Goodwill refund after a failed return check',
+                        ]);
+                    }
                 }
             }
 
@@ -520,7 +566,7 @@ class ReturnRequestService implements ReturnRequestServiceInterface
                 'status' => ReturnRequestStatus::Resolved,
                 'qc_result' => $passed ? ReturnRequest::QC_PASSED : ReturnRequest::QC_FAILED,
                 'qc_outcome' => $outcome,
-                'qc_fault' => $fault->value,
+                'qc_fault' => $goodwill ? 'platform_goodwill' : $fault->value,
                 'qc_notes' => $notes,
                 'qc_by_admin_id' => $adminId,
                 'qc_at' => now(),

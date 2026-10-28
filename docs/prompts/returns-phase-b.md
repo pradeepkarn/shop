@@ -131,6 +131,26 @@ the queue; a cancelled return pickup closes the return request).
 - Seller order → `partially_refunded` / `refunded` (parent rollup likewise).
 - Emails: customer (QC result, converted to refund, replacement shipped, lost return, refund paid/failed);
   seller (return received, QC result).
+- **Failed QC + refund (full or partial) = platform goodwill by default**: the seller's sale and fees are
+  not reversed; a `platform_losses` row (`goodwill_refund`) records the refunded amount. Admin may
+  explicitly choose fault = seller instead; then the seller reversal applies (partial = same share). The
+  choice is logged (`fault_chosen_by_admin`, `goodwill_refund`). Return shipping, and ship-back shipping on
+  a failed QC, stay charged to the seller.
+
+## B7: screens
+
+- Customer order page, per delivered package: "Return items" while the window is open (end shown in India
+  time); units per line, reason, photos (required for claims), refund or replacement (hidden on replacement
+  orders); errors from the service shown inline. Reply to "more info needed" with text + photos (max 5 total).
+  Timeline: request status, reverse pickup events (courier's text, location, India time), refund (amount,
+  status, UTR masked to last 4), replacement order link. UPI/bank form when a refund needs details or after
+  a failed payout. Order/package show Partially Refunded / Refunded.
+- Seller: "Returns" tab on orders (own packages only); package page shows returns, photos, report form,
+  QC outcome.
+- Admin: return override form on the order page (returns.manage; reason required, logged with the
+  window override); returns queue filters (status, reason, seller, overdue seller report, one package via
+  `?sellerOrder=`), inline photo thumbnails (viewing logged once per admin/request/hour), links from the
+  order page and from return-pickup / ship-back shipment pages.
 
 ## Chunks
 
@@ -141,4 +161,4 @@ the queue; a cancelled return pickup closes the return request).
 - B5: customer return requests, reverse pickup via Fake/Ekart/Shiprocket drivers, return hold.
 - B6: return received → condition report → QC decision → refund / per-unit reversal / return
   shipping fee / coupon release; replacement orders.
-- B7: customer, seller and admin screens; permissions; activity log; manual checklist.
+- B7: customer, seller and admin screens; permissions; activity log; manual checklist. (done)

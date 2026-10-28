@@ -20,7 +20,7 @@ interface ReturnRequestServiceInterface
 
     /**
      * Customer requests a return of units of one package. Places the return hold on the package settlement.
-     * $overrideByAdminId lets an admin create it after the window closed (logged).
+     * $overrideByAdminId lets an admin create it after the window closed; $overrideReason is required and logged.
      *
      * @param  array<int, int>  $units  order item id => units
      * @param  array<int, UploadedFile>  $photos
@@ -34,6 +34,7 @@ interface ReturnRequestServiceInterface
         array $photos = [],
         ?string $notes = null,
         ?int $overrideByAdminId = null,
+        ?string $overrideReason = null,
     ): ReturnRequest;
 
     public function requestInfo(string $returnRequestId, string $message, int $adminId): ReturnRequest;
@@ -41,7 +42,10 @@ interface ReturnRequestServiceInterface
     /**
      * Customer answers an information request; the request goes back to review.
      */
-    public function respond(string $returnRequestId, int $userId, string $response): ReturnRequest;
+    /**
+     * @param  array<int, UploadedFile>  $photos  extra photos (JPG/PNG/WebP), at most 5 on the request in total
+     */
+    public function respond(string $returnRequestId, int $userId, string $response, array $photos = []): ReturnRequest;
 
     /**
      * Approve: book the return pickup (outside any transaction), or for a missing item reverse the seller's sale and

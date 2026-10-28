@@ -8,6 +8,7 @@ use App\Orders\Contracts\ReturnableOrderLookupInterface;
 use App\Returns\Models\ReturnRequest;
 use App\Services\AdminActivityLogger;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -21,7 +22,10 @@ class ReturnPhotoController extends Controller
     {
         $path = $this->photoPath($request, $kind, $index);
 
-        AdminActivityLogger::log('returns.return_photo_viewed', $request, ['kind' => $kind, 'index' => $index]);
+        // Thumbnails on the returns queue load every photo on each render; log a viewing once per admin, request and hour.
+        if (Cache::add('return-photo-viewed:'.auth()->id().':'.$request->id.':'.$kind, true, now()->addHour())) {
+            AdminActivityLogger::log('returns.return_photo_viewed', $request, ['kind' => $kind, 'index' => $index]);
+        }
 
         return Storage::disk('local')->response($path);
     }

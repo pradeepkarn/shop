@@ -2,7 +2,9 @@
 
 namespace App\Livewire\Admin;
 
+use App\Models\SellerProfile;
 use App\Orders\Models\OrderItem;
+use App\Orders\Models\SellerOrder;
 use App\Returns\Contracts\ReturnRequestServiceInterface;
 use App\Returns\Contracts\UndeliveredItemServiceInterface;
 use App\Returns\Enums\ReturnRequestStatus;
@@ -17,6 +19,7 @@ use App\Services\AdminActivityLogger;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
 new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Component {
@@ -68,10 +71,54 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
     public function returnRequests()
     {
         return ReturnRequest::with('items')
-            ->whereIn('status', ReturnRequestStatus::activeValues())
+            ->when(
+                $this->filterStatus === 'all',
+                fn ($q) => $q,
+                fn ($q) => $this->filterStatus === '' || $this->filterStatus === 'active'
+                    ? $q->whereIn('status', ReturnRequestStatus::activeValues())
+                    : $q->where('status', $this->filterStatus),
+            )
+            ->when($this->filterReason !== '', fn ($q) => $q->where('reason', $this->filterReason))
+            ->when($this->filterSeller !== '', fn ($q) => $q->whereIn('seller_order_id', SellerOrder::select('id')->where('seller_profile_id', (int) $this->filterSeller)))
+            ->when($this->sellerOrder !== '', fn ($q) => $q->where('seller_order_id', $this->sellerOrder))
+            ->when($this->filterOverdueReport, fn ($q) => $q->where('status', ReturnRequestStatus::Received->value)
+                ->whereNull('seller_reported_at')
+                ->whereNotNull('report_deadline_at')
+                ->where('report_deadline_at', '<', now()))
             ->oldest()
             ->limit(50)
             ->get();
+    }
+
+    /** 'active' (default), 'all', or a single ReturnRequestStatus value. */
+    #[Url(as: 'status')]
+    public string $filterStatus = 'active';
+
+    #[Url(as: 'reason')]
+    public string $filterReason = '';
+
+    /** Seller profile id. */
+    #[Url(as: 'seller')]
+    public string $filterSeller = '';
+
+    #[Url(as: 'overdue')]
+    public bool $filterOverdueReport = false;
+
+    /** Limits the queue to one package (linked from the order and shipment pages). */
+    #[Url]
+    public string $sellerOrder = '';
+
+    /**
+     * Sellers that have return requests, for the filter dropdown.
+     *
+     * @return \Illuminate\Support\Collection<int, string>
+     */
+    #[Computed]
+    public function returnSellers()
+    {
+        return SellerProfile::whereIn('id', SellerOrder::select('seller_profile_id')->whereIn('id', ReturnRequest::select('seller_order_id')))
+            ->orderBy('store_name')
+            ->pluck('store_name', 'id');
     }
 
     /** @var array<string, string> request id => fault override (seller_fault, customer_remorse, courier_fault) */
@@ -118,6 +165,8 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
                 'result' => $request->qc_result,
                 'outcome' => $request->qc_outcome,
                 'fault' => $request->qc_fault,
+                'fault_chosen_by_admin' => $fault?->value,
+                'goodwill_refund' => $request->qc_fault === 'platform_goodwill',
                 'refund_id' => $request->refund_id,
                 'replacement_seller_order_id' => $request->replacement_seller_order_id,
             ]);
@@ -248,6 +297,34 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
             Return requests ({{ $this->returnRequests->count() }})
         </h2>
 
+        <div data-test="return-filters" class="flex flex-wrap items-center gap-2 text-xs">
+            <select wire:model.live="filterStatus" data-test="filter-status" class="rounded-lg border border-zinc-200 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900">
+                <option value="active">Open requests</option>
+                <option value="all">All statuses</option>
+                @foreach (ReturnRequestStatus::cases() as $statusCase)
+                    <option value="{{ $statusCase->value }}">{{ $statusCase->label() }}</option>
+                @endforeach
+            </select>
+            <select wire:model.live="filterReason" data-test="filter-reason" class="rounded-lg border border-zinc-200 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900">
+                <option value="">Any reason</option>
+                @foreach (\App\Returns\Enums\ReturnReason::cases() as $reasonCase)
+                    <option value="{{ $reasonCase->value }}">{{ $reasonCase->label() }}</option>
+                @endforeach
+            </select>
+            <select wire:model.live="filterSeller" data-test="filter-seller" class="rounded-lg border border-zinc-200 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900">
+                <option value="">Any seller</option>
+                @foreach ($this->returnSellers as $sellerId => $storeName)
+                    <option value="{{ $sellerId }}">{{ $storeName }}</option>
+                @endforeach
+            </select>
+            <label class="flex items-center gap-1"><input type="checkbox" wire:model.live="filterOverdueReport" data-test="filter-overdue" /> Seller report overdue</label>
+            @if ($sellerOrder !== '')
+                <span data-test="filter-seller-order" class="rounded-lg bg-indigo-50 px-2 py-1 font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                    One package only · <button type="button" wire:click="$set('sellerOrder', '')" class="underline">show all</button>
+                </span>
+            @endif
+        </div>
+
         @php $requestItems = OrderItem::whereIn('id', $this->returnRequests->flatMap->items->pluck('order_item_id'))->get()->keyBy('id'); @endphp
 
         @forelse ($this->returnRequests as $request)
@@ -268,28 +345,45 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
                     <div class="text-right">
                         <span class="rounded-lg bg-zinc-200 px-2 py-0.5 font-bold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200" data-test="return-status">{{ $request->status->label() }}</span>
                         <p class="mt-1 text-zinc-500">{{ count($request->photos ?? []) }} photo(s)</p>
+                        @can('orders.view')
+                            <a href="{{ route('admin.orders.show', ['order' => $request->order_id]) }}" wire:navigate data-test="return-order-link" class="block font-bold text-indigo-600 underline dark:text-indigo-400">Order &rarr;</a>
+                        @endcan
                         @if ($request->reverse_shipment_id)
-                            <a href="{{ route('admin.shipments.show', ['shipment' => $request->reverse_shipment_id]) }}" wire:navigate class="font-bold text-indigo-600 underline dark:text-indigo-400">Return pickup &rarr;</a>
+                            <a href="{{ route('admin.shipments.show', ['shipment' => $request->reverse_shipment_id]) }}" wire:navigate class="block font-bold text-indigo-600 underline dark:text-indigo-400">Return pickup &rarr;</a>
+                        @endif
+                        @if ($request->ship_back_shipment_id)
+                            <a href="{{ route('admin.shipments.show', ['shipment' => $request->ship_back_shipment_id]) }}" wire:navigate class="block font-bold text-indigo-600 underline dark:text-indigo-400">Ship-back &rarr;</a>
+                        @endif
+                        @if ($request->replacement_seller_order_id)
+                            <span class="block text-zinc-500">Replacement package {{ \Illuminate\Support\Str::limit($request->replacement_seller_order_id, 8, '') }}</span>
                         @endif
                     </div>
                 </div>
 
                 @if (! empty($request->photos))
-                    <p class="flex flex-wrap gap-2">
+                    <div class="flex flex-wrap gap-2" data-test="customer-photos">
                         @foreach ($request->photos as $index => $photo)
-                            <a href="{{ route('admin.returns.request-photo', ['request' => $request->id, 'kind' => 'customer', 'index' => $index]) }}" target="_blank" class="underline">Customer photo {{ $index + 1 }}</a>
+                            @php $photoUrl = route('admin.returns.request-photo', ['request' => $request->id, 'kind' => 'customer', 'index' => $index]); @endphp
+                            <a href="{{ $photoUrl }}" target="_blank" title="Customer photo {{ $index + 1 }}">
+                                <img src="{{ $photoUrl }}" alt="Customer photo {{ $index + 1 }}" loading="lazy" class="h-20 w-20 rounded-lg border border-zinc-200 object-cover dark:border-zinc-700" />
+                            </a>
                         @endforeach
-                    </p>
+                    </div>
                 @endif
 
                 @if ($request->status === ReturnRequestStatus::Received)
                     <div class="border-t border-zinc-200 pt-2 dark:border-zinc-700">
                         @if ($request->seller_reported_at)
                             <p data-test="seller-report">Seller report: <strong>{{ str_replace('_', ' ', $request->seller_condition) }}</strong>{{ $request->seller_report_notes ? ' — '.$request->seller_report_notes : '' }}
-                                @foreach ($request->seller_report_photos ?? [] as $index => $photo)
-                                    · <a href="{{ route('admin.returns.request-photo', ['request' => $request->id, 'kind' => 'seller', 'index' => $index]) }}" target="_blank" class="underline">photo {{ $index + 1 }}</a>
-                                @endforeach
                             </p>
+                            <div class="mt-1 flex flex-wrap gap-2" data-test="seller-photos">
+                                @foreach ($request->seller_report_photos ?? [] as $index => $photo)
+                                    @php $photoUrl = route('admin.returns.request-photo', ['request' => $request->id, 'kind' => 'seller', 'index' => $index]); @endphp
+                                    <a href="{{ $photoUrl }}" target="_blank" title="Seller photo {{ $index + 1 }}">
+                                        <img src="{{ $photoUrl }}" alt="Seller photo {{ $index + 1 }}" loading="lazy" class="h-20 w-20 rounded-lg border border-zinc-200 object-cover dark:border-zinc-700" />
+                                    </a>
+                                @endforeach
+                            </div>
                         @elseif ($request->sellerReportMissed())
                             <p data-test="seller-report-missed" class="font-semibold text-red-600">Seller missed the report deadline (@datetime($request->report_deadline_at)); decide without it.</p>
                         @else
@@ -301,7 +395,7 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
                         @if ($request->seller_reported_at || $request->sellerReportMissed())
                             <div data-test="qc-form" class="grid grid-cols-1 md:grid-cols-2 gap-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
                                 <select wire:model="qcFault.{{ $request->id }}" class="rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
-                                    <option value="">Fault: default ({{ $request->reason->fault()->label() }} on pass, customer on fail)</option>
+                                    <option value="">Fault: default ({{ $request->reason->fault()->label() }} on pass; on fail a refund is platform goodwill)</option>
                                     @foreach (\App\Returns\Enums\ReturnFault::cases() as $faultCase)
                                         <option value="{{ $faultCase->value }}">{{ $faultCase->label() }}</option>
                                     @endforeach

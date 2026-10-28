@@ -301,33 +301,53 @@ test('QC fail, ship back: no restock, no refund, sale stands, seller pays return
     expect($this->sellerOrder->fresh()->status)->toBe(SellerOrderStatus::Delivered);
 });
 
-test('QC fail, partial refund: capped at the refundable amount, sale and fees reversed in the same share', function () {
+test('QC fail with an explicit seller fault: partial refund capped, sale reversed in the same share (seller fault keeps fees)', function () {
     $request = ($this->received)(2);
-    expect(fn () => ($this->qc)($request, false, 'partial_refund', 9601))->toThrow(DomainException::class, 'between ₹0.01 and ₹96.00');
+    expect(fn () => ($this->qc)($request, false, 'partial_refund', 9601, ReturnFault::SellerFault))->toThrow(DomainException::class, 'between ₹0.01 and ₹96.00');
 
-    ($this->qc)($request, false, 'partial_refund', 5000);
+    Livewire::actingAs($this->admin, 'admin')->test('pages::admin.returns-index')
+        ->set("qcFailOutcome.{$request->id}", 'partial_refund')
+        ->set("qcPartialAmount.{$request->id}", '50')
+        ->set("qcFault.{$request->id}", 'seller_fault')
+        ->call('qcFail', $request->id)
+        ->assertSee('QC recorded: partial refund');
 
     $item = $request->items->first();
     expect(CustomerRefund::sole()->amount_paise)->toBe(5000)
         ->and($this->listing->fresh()->stock)->toBe(5)
-        // share 5,000 / 9,600 of the 2 units' entries (customer fault on fail: fees reversed too)
+        ->and($request->fresh()->qc_fault)->toBe('seller_fault')
+        // share 5,000 / 9,600 of the 2 units' sale and its tax; seller fault keeps the fees
         ->and(($this->entries)("return:{$item->id}:"))->toBe([
             "return:{$item->id}:sale:{$this->toy->id}" => -5208,
-            "return:{$item->id}:commission:{$this->toy->id}" => 520,
-            "return:{$item->id}:closing_fee:{$this->toy->id}" => 104,
-            "return:{$item->id}:gst_on_fees:{$this->toy->id}" => 112,
             "return:{$item->id}:tcs:{$this->toy->id}" => 26,
         ])
-        ->and(($this->returnSettlement)($request)->net_payout)->toBe(-(4446 + 600));
+        ->and(($this->returnSettlement)($request)->net_payout)->toBe(-(5182 + 600))
+        ->and(PlatformLoss::where('loss_type', PlatformLoss::TYPE_GOODWILL_REFUND)->count())->toBe(0)
+        ->and(AdminActivityLog::where('action', 'returns.qc_decided')->sole()->properties['fault_chosen_by_admin'])->toBe('seller_fault');
 });
 
-test('QC fail, full refund anyway: refunds what the customer paid for those units', function () {
+test('QC fail with a refund is platform goodwill by default: seller ledger unchanged, platform loss recorded', function () {
     $request = ($this->received)(1);
+    $ledgerBefore = SellerLedgerEntry::where('source_key', 'not like', "return:{$request->id}:return_shipping:%")->pluck('amount', 'source_key')->all();
+
     ($this->qc)($request, false, 'full_refund');
 
+    $loss = PlatformLoss::where('loss_type', PlatformLoss::TYPE_GOODWILL_REFUND)->sole();
     expect(CustomerRefund::sole()->amount_paise)->toBe(4800)
         ->and($request->fresh()->qc_outcome)->toBe('full_refund')
-        ->and($this->listing->fresh()->stock)->toBe(5);
+        ->and($request->fresh()->qc_fault)->toBe('platform_goodwill')
+        ->and($this->listing->fresh()->stock)->toBe(5)
+        // No sale or fee reversal: only the return pickup shipping (seller pays reverse shipping)
+        ->and(SellerLedgerEntry::where('source_key', 'not like', "return:{$request->id}:return_shipping:%")->pluck('amount', 'source_key')->all())->toBe($ledgerBefore)
+        ->and(($this->entries)("return:{$request->items->first()->id}:"))->toBe([])
+        ->and(($this->returnSettlement)($request)->net_payout)->toBe(-300)
+        ->and($loss->loss_amount_paise)->toBe(4800)
+        ->and($loss->shipment_id)->toBe($request->reverse_shipment_id);
+
+    // Partial goodwill: the platform absorbs exactly what was refunded
+    $second = ($this->received)(1);
+    ($this->qc)($second, false, 'partial_refund', 2000);
+    expect(PlatformLoss::where('loss_type', PlatformLoss::TYPE_GOODWILL_REFUND)->where('shipment_id', $second->reverse_shipment_id)->sole()->loss_amount_paise)->toBe(2000);
 });
 
 test('a seller already paid out carries the return debit into the next payout', function () {
