@@ -3,6 +3,7 @@
 namespace App\Settlements\Services;
 
 use App\Fees\Contracts\OrderItemFeeSnapshotLookupInterface;
+use App\Orders\Contracts\SellerOrderReturnWindowLookupInterface;
 use App\Orders\Contracts\SellerOrderStatusLookupInterface;
 use App\Settlements\Contracts\SellerLedgerServiceInterface;
 use App\Settlements\Contracts\SettlementServiceInterface;
@@ -22,6 +23,7 @@ class SettlementService implements SettlementServiceInterface
         protected SellerOrderStatusLookupInterface $orderStatusLookup,
         protected OrderItemFeeSnapshotLookupInterface $feeSnapshotLookup,
         protected SellerLedgerServiceInterface $ledgerService,
+        protected SellerOrderReturnWindowLookupInterface $returnWindowLookup,
     ) {}
 
     public function createSettlementForSellerOrder(string $sellerOrderId): ?SellerOrderSettlement
@@ -60,6 +62,7 @@ class SettlementService implements SettlementServiceInterface
             $holdUntil = null;
         } elseif ($statusDto->status === 'delivered') {
             $status = SettlementStatus::OnHold;
+            $returnWindowDays = $this->returnWindowLookup->returnWindowDays($sellerOrderId);
             // App time (UTC): hold_until is stored as wall-clock, so an IST-zoned value would land 5.5 hours late
             $deliveredBase = $statusDto->deliveredAt
                 ? CarbonImmutable::instance($statusDto->deliveredAt)->setTimezone(config('app.timezone'))
@@ -131,11 +134,13 @@ class SettlementService implements SettlementServiceInterface
         if ($settlement->status === SettlementStatus::Pending) {
             // App time, like the delivered path: an IST-zoned instant would be stored as IST wall-clock (+5:30)
             $deliveredBase = $deliveredAt ?? CarbonImmutable::now();
-            $holdUntil = $deliveredBase->addDays($settlement->return_window_days);
+            // Hold for the longest return window among the package's items (per vertical); the window used is stored
+            $returnWindowDays = $this->returnWindowLookup->returnWindowDays($sellerOrderId);
 
             $settlement->update([
                 'status' => SettlementStatus::OnHold,
-                'hold_until' => $holdUntil,
+                'return_window_days' => $returnWindowDays,
+                'hold_until' => $deliveredBase->addDays($returnWindowDays),
             ]);
         }
 

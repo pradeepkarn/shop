@@ -36,7 +36,10 @@ class SellerLedgerService implements SellerLedgerServiceInterface
                 $tcsPaise = $snapshot->tcs->getPaise();
                 $tdsPaise = $snapshot->tds->getPaise();
 
-                // 1. Sale (Credit)
+                // 1. Sale (Credit) at the full pre-coupon line total. Correct only because every coupon is
+                // platform-funded: the Coupons module refuses to save, evaluate or redeem seller-funded coupons
+                // (guarded by tests/Feature/Coupons/SellerFundedCouponGuardTest.php). If seller-funded coupons are
+                // ever enabled, the seller's share of the discount must be debited here and in refund reversals.
                 $this->createEntryIfNotExists([
                     'seller_profile_id' => $settlement->seller_profile_id,
                     'seller_order_id' => $settlement->seller_order_id,

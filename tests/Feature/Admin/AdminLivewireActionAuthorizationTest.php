@@ -608,7 +608,20 @@ test('staff without returns.view do not see rto reports or courier claims on the
 test('returns permissions are registered and synced to the admin guard', function () {
     $this->artisan('permissions:sync')->assertSuccessful();
 
-    expect(AdminPermissions::all())->toContain(AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE)
-        ->and(Permission::where('guard_name', 'admin')->whereIn('name', [AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE])->count())->toBe(2)
+    expect(AdminPermissions::all())->toContain(AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE, AdminPermissions::REFUNDS_MANAGE)
+        ->and(Permission::where('guard_name', 'admin')->whereIn('name', [AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE, AdminPermissions::REFUNDS_MANAGE])->count())->toBe(3)
+        ->and(Role::findByName('Super Admin', 'admin')->hasPermissionTo(AdminPermissions::REFUNDS_MANAGE))->toBeTrue()
         ->and(Role::findByName('Super Admin', 'admin')->hasPermissionTo(AdminPermissions::RETURNS_MANAGE))->toBeTrue();
 });
+
+test('staff without refunds.manage cannot record refund payouts or failures', function (string $method) {
+    $staff = Admin::factory()->create();
+    $role = Role::findOrCreate('Returns Manager No Refunds', 'admin');
+    $role->syncPermissions([AdminPermissions::RETURNS_VIEW, AdminPermissions::RETURNS_MANAGE]);
+    $staff->assignRole($role);
+
+    Livewire::actingAs($staff, 'admin')
+        ->test('pages::admin.refunds-index')
+        ->call($method, (string) Str::ulid())
+        ->assertForbidden();
+})->with(['markRefundPaid', 'markRefundFailed']);

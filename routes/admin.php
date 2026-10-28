@@ -58,6 +58,7 @@ Route::middleware(['auth:admin', EnsureAdminIsActive::class, AuthenticateAdminSe
 
     // Returns & Claims
     Route::livewire('returns', 'pages::admin.returns-index')->name('returns.index')->middleware('can:returns.view');
+    Route::livewire('refunds', 'pages::admin.refunds-index')->name('refunds.index')->middleware('can:returns.view');
     Route::get('returns/rto-reports/{report}/photos/{index}', [RtoPhotoController::class, 'admin'])->whereNumber('index')->name('returns.rto-photo')->middleware('can:returns.view');
 
     // Staff & Roles Management

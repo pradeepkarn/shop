@@ -184,6 +184,7 @@ dataset('admin_protected_routes', [
     ['admin.shipments.show', AdminPermissions::SHIPPING_VIEW],
     ['admin.returns.index', AdminPermissions::RETURNS_VIEW],
     ['admin.returns.rto-photo', AdminPermissions::RETURNS_VIEW],
+    ['admin.refunds.index', AdminPermissions::RETURNS_VIEW],
     ['admin.settings.branding', AdminPermissions::BRANDING_VIEW],
 ]);
 

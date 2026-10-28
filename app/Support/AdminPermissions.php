@@ -78,6 +78,8 @@ class AdminPermissions
 
     public const RETURNS_MANAGE = 'returns.manage';
 
+    public const REFUNDS_MANAGE = 'refunds.manage';
+
     /**
      * Get all registered permissions grouped by module.
      *
@@ -265,6 +267,10 @@ class AdminPermissions
                 self::RETURNS_MANAGE => [
                     'label' => 'Manage Returns & Claims',
                     'description' => 'Decide RTO restock vs write-off, file claims, and handle partial delivery.',
+                ],
+                self::REFUNDS_MANAGE => [
+                    'label' => 'Manage Refunds',
+                    'description' => 'See full customer payout details and record refund payouts (UTR) or failures.',
                 ],
             ],
         ];
