@@ -20,6 +20,7 @@ use Illuminate\Support\Carbon;
  * @property int $net_payout
  * @property int $claimable_credits
  * @property SettlementStatus $status
+ * @property bool $is_partial_delivery_hold
  * @property int $return_window_days
  * @property Carbon|null $hold_until
  * @property string|null $payout_id
@@ -33,6 +34,11 @@ class SellerOrderSettlement extends Model
 
     protected $table = 'seller_order_settlements';
 
+    protected $attributes = [
+        'claimable_credits' => 0,
+        'is_partial_delivery_hold' => false,
+    ];
+
     protected $fillable = [
         'id',
         'seller_order_id',
@@ -43,6 +49,7 @@ class SellerOrderSettlement extends Model
         'net_payout',
         'claimable_credits',
         'status',
+        'is_partial_delivery_hold',
         'return_window_days',
         'hold_until',
         'payout_id',
@@ -60,6 +67,7 @@ class SellerOrderSettlement extends Model
             'net_payout' => 'integer',
             'claimable_credits' => 'integer',
             'status' => SettlementStatus::class,
+            'is_partial_delivery_hold' => 'boolean',
             'return_window_days' => 'integer',
             'hold_until' => 'datetime',
             'paid_at' => 'datetime',

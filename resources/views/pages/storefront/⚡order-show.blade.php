@@ -187,10 +187,30 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                         </div>
                     </div>
 
+                    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::LostInTransit)
+                        <div data-test="lost-in-transit-notice" class="my-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+                            <strong class="font-bold">This package was lost in transit by the courier.</strong>
+                            You will not be charged for it.
+                        </div>
+                    @elseif ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::ReturnedToOrigin)
+                        <div data-test="rto-notice" class="my-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300">
+                            <strong class="font-bold">Returned to seller.</strong>
+                            This package could not be delivered and went back to the seller. You will not be charged for it.
+                        </div>
+                    @endif
+
                     <!-- Items list -->
                     @php
                         $shipment = app(\App\Shipping\Contracts\ShipmentLookupInterface::class)->getShipmentForSellerOrder($sellerOrder->id);
+                        $deliveredItemIds = array_map('intval', $shipment?->partialDeliveryData['delivered_item_ids'] ?? []);
                     @endphp
+
+                    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::PartiallyDelivered)
+                        <div data-test="partial-delivery-notice" class="my-4 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200">
+                            <strong class="font-bold">Partially delivered.</strong>
+                            Only some items in this package reached you; each item below shows whether it arrived. You are only charged for delivered items.
+                        </div>
+                    @endif
 
                     @if ($shipment)
                         <div class="my-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
@@ -210,6 +230,22 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                                     <a href="{{ $shipment->publicTrackingUrl }}" target="_blank" class="text-xs font-bold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 underline inline-flex items-center gap-1">
                                         Track delivery on {{ strtoupper($shipment->provider) }} &rarr;
                                     </a>
+                                </div>
+                            @endif
+
+                            @if ($shipment->status === \App\Shipping\Enums\ShipmentStatus::DeliveryFailed)
+                                <div data-test="delivery-failed-alert" class="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200 flex items-start gap-2.5">
+                                    <svg class="size-4 shrink-0 text-amber-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                    <div>
+                                        <strong class="font-bold">Delivery attempt failed</strong>
+                                        <span data-test="ndr-attempt-count" class="ml-1 text-[11px] font-semibold">(attempt {{ $shipment->ndrAttemptCount ?: 1 }})</span>
+                                        <p class="mt-0.5">Reason: {{ $shipment->latestNdrReason ?: 'Courier was unable to deliver your package (customer unavailable / address unreachable).' }}</p>
+                                        <p class="mt-1 text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                                            The courier partner will re-attempt delivery or customer support will contact you.
+                                        </p>
+                                    </div>
                                 </div>
                             @endif
 
@@ -251,6 +287,13 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                                     <p class="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
                                         Qty: <strong>{{ $item->qty }}</strong> &middot; Price: <strong>₹{{ number_format($item->unit_price / 100) }}</strong>
                                     </p>
+                                    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::PartiallyDelivered)
+                                        @if (in_array((int) $item->id, $deliveredItemIds, true))
+                                            <span data-test="item-delivered" class="mt-1 inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">Delivered</span>
+                                        @else
+                                            <span data-test="item-not-delivered" class="mt-1 inline-flex rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-bold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">Not delivered &mdash; not charged</span>
+                                        @endif
+                                    @endif
                                 </div>
                                 <div class="text-right">
                                     <span class="text-sm font-bold text-zinc-900 dark:text-white">

@@ -24,6 +24,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $creation_step
  * @property string|null $public_tracking_url
  * @property ShipmentStatus $status
+ * @property int $ndr_attempt_count
+ * @property string|null $latest_ndr_reason
+ * @property string|null $ndr_updated_phone
+ * @property string|null $ndr_updated_address
+ * @property string|null $ndr_action
+ * @property Carbon|null $ndr_actioned_at
+ * @property array<string, mixed>|null $partial_delivery_data
  * @property int $actual_weight_grams
  * @property int $volumetric_weight_grams
  * @property int $chargeable_weight_grams
@@ -32,6 +39,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $height_cm
  * @property bool $is_cod
  * @property int $cod_amount_paise
+ * @property int|null $declared_value_paise
  * @property string|null $label_path
  * @property string|null $manifest_path
  * @property Carbon|null $label_generated_at
@@ -70,6 +78,13 @@ class Shipment extends Model
         'creation_step',
         'public_tracking_url',
         'status',
+        'ndr_attempt_count',
+        'latest_ndr_reason',
+        'ndr_updated_phone',
+        'ndr_updated_address',
+        'ndr_action',
+        'ndr_actioned_at',
+        'partial_delivery_data',
         'actual_weight_grams',
         'volumetric_weight_grams',
         'chargeable_weight_grams',
@@ -78,6 +93,7 @@ class Shipment extends Model
         'height_cm',
         'is_cod',
         'cod_amount_paise',
+        'declared_value_paise',
         'label_path',
         'manifest_path',
         'label_generated_at',
@@ -102,6 +118,9 @@ class Shipment extends Model
             'seller_profile_id' => 'integer',
             'fulfillment_attempt' => 'integer',
             'status' => ShipmentStatus::class,
+            'ndr_attempt_count' => 'integer',
+            'ndr_actioned_at' => 'datetime',
+            'partial_delivery_data' => 'array',
             'actual_weight_grams' => 'integer',
             'volumetric_weight_grams' => 'integer',
             'chargeable_weight_grams' => 'integer',
@@ -110,6 +129,7 @@ class Shipment extends Model
             'height_cm' => 'integer',
             'is_cod' => 'boolean',
             'cod_amount_paise' => 'integer',
+            'declared_value_paise' => 'integer',
             'estimated_carrier_charges_paise' => 'integer',
             'actual_carrier_charges_paise' => 'integer',
             'carrier_tat_min_days' => 'integer',

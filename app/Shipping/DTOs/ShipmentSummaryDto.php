@@ -8,6 +8,7 @@ use DateTimeInterface;
 final readonly class ShipmentSummaryDto
 {
     /**
+     * @param  array<string, mixed>|null  $partialDeliveryData
      * @param  list<ShipmentEventDto>  $events
      */
     public function __construct(
@@ -34,6 +35,12 @@ final readonly class ShipmentSummaryDto
         public ?DateTimeInterface $pickedUpAt = null,
         public ?DateTimeInterface $deliveredAt = null,
         public ?DateTimeInterface $cancelledAt = null,
+        public int $ndrAttemptCount = 0,
+        public ?string $latestNdrReason = null,
+        public ?string $ndrUpdatedPhone = null,
+        public ?string $ndrUpdatedAddress = null,
+        public ?string $ndrAction = null,
+        public ?array $partialDeliveryData = null,
         public array $events = [],
     ) {}
 }

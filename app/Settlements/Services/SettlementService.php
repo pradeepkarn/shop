@@ -54,16 +54,16 @@ class SettlementService implements SettlementServiceInterface
         }
 
         $returnWindowDays = (int) config('settlements.return_window_days', 7);
-        $timezone = (string) config('settlements.timezone', 'Asia/Kolkata');
 
         if ($statusDto->status === 'cancelled') {
             $status = SettlementStatus::Void;
             $holdUntil = null;
         } elseif ($statusDto->status === 'delivered') {
             $status = SettlementStatus::OnHold;
+            // App time (UTC): hold_until is stored as wall-clock, so an IST-zoned value would land 5.5 hours late
             $deliveredBase = $statusDto->deliveredAt
-                ? CarbonImmutable::parse($statusDto->deliveredAt, $timezone)
-                : CarbonImmutable::now($timezone);
+                ? CarbonImmutable::instance($statusDto->deliveredAt)->setTimezone(config('app.timezone'))
+                : CarbonImmutable::now();
             $holdUntil = $deliveredBase->addDays($returnWindowDays);
         } else {
             $status = SettlementStatus::Pending;
@@ -129,8 +129,8 @@ class SettlementService implements SettlementServiceInterface
         }
 
         if ($settlement->status === SettlementStatus::Pending) {
-            $timezone = (string) config('settlements.timezone', 'Asia/Kolkata');
-            $deliveredBase = $deliveredAt ?? CarbonImmutable::now($timezone);
+            // App time, like the delivered path: an IST-zoned instant would be stored as IST wall-clock (+5:30)
+            $deliveredBase = $deliveredAt ?? CarbonImmutable::now();
             $holdUntil = $deliveredBase->addDays($settlement->return_window_days);
 
             $settlement->update([
@@ -165,12 +165,85 @@ class SettlementService implements SettlementServiceInterface
         return $settlement->fresh();
     }
 
+    public function processRtoSettlement(string $sellerOrderId): ?SellerOrderSettlement
+    {
+        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        if (! $settlement) {
+            return null;
+        }
+
+        DB::transaction(function () use ($settlement) {
+            // Record RTO reversals (reverse sale & fees, keep forward shipping, debit RTO shipping)
+            $this->ledgerService->recordRtoReversalsForSettlement($settlement);
+
+            // Compute total shipping debited (forward + RTO)
+            $sumAmount = (int) SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
+                ->where('type', LedgerEntryType::ShippingFee->value)
+                ->sum('amount');
+            $totalShippingDebit = abs($sumAmount);
+
+            // RTO settlement must not end as Void with uncollected charges (requirement #1)
+            // It becomes Eligible with net negative payout = -$totalShippingDebit
+            $settlement->update([
+                'status' => SettlementStatus::Eligible,
+                'gross_amount' => 0,
+                'total_deductions' => $totalShippingDebit,
+                'net_payout' => -$totalShippingDebit,
+                'hold_until' => null,
+            ]);
+        });
+
+        return $settlement->fresh();
+    }
+
+    public function confirmLostShipmentSettlement(string $sellerOrderId, int $adminId, ?string $notes = null): ?SellerOrderSettlement
+    {
+        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        if (! $settlement) {
+            return null;
+        }
+
+        // Platform bears the loss, so the seller is settled exactly as if the order was delivered now
+        return DB::transaction(function () use ($settlement, $sellerOrderId) {
+            $settlement->update(['is_partial_delivery_hold' => false]);
+
+            return $this->markSettlementOnHold($sellerOrderId);
+        });
+    }
+
+    public function releasePartialDeliveryHold(string $sellerOrderId, array $undeliveredOrderItemIds = []): ?SellerOrderSettlement
+    {
+        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        if (! $settlement) {
+            return null;
+        }
+
+        // Admin has confirmed the delivered items: pay only for those, clear the hold, start the return window
+        return DB::transaction(function () use ($settlement, $sellerOrderId, $undeliveredOrderItemIds) {
+            $reversed = $this->ledgerService->recordPartialDeliveryReversals($settlement, $undeliveredOrderItemIds);
+
+            $gross = $settlement->gross_amount - $reversed['sale'];
+            $net = $settlement->net_payout + $reversed['net'];
+
+            $settlement->update([
+                'gross_amount' => $gross,
+                'net_payout' => $net,
+                'total_deductions' => $gross - $net,
+                'is_partial_delivery_hold' => false,
+            ]);
+
+            return $this->markSettlementOnHold($sellerOrderId);
+        });
+    }
+
     public function releaseMaturedSettlements(): int
     {
-        $timezone = (string) config('settlements.timezone', 'Asia/Kolkata');
-        $now = CarbonImmutable::now($timezone);
+        // hold_until is stored in app time (UTC); an IST-zoned "now" would be bound as IST wall-clock
+        // and release settlements 5.5 hours early
+        $now = CarbonImmutable::now();
 
         $matured = SellerOrderSettlement::where('status', SettlementStatus::OnHold)
+            ->where('is_partial_delivery_hold', false)
             ->where('hold_until', '<=', $now)
             ->get();
 

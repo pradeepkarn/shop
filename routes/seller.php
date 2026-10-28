@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\SellerDocumentController;
+use App\Returns\Http\Controllers\RtoPhotoController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(['auth', 'verified'])->group(function () {
@@ -16,6 +17,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::middleware(['ensure.seller.orders'])->prefix('seller')->name('seller.')->group(function () {
         Route::livewire('orders', 'pages::seller.orders-index')->name('orders.index');
         Route::livewire('orders/{sellerOrder}', 'pages::seller.orders-show')->name('orders.show');
+        Route::get('returns/rto-reports/{report}/photos/{index}', [RtoPhotoController::class, 'seller'])->whereNumber('index')->name('returns.rto-photo');
         Route::livewire('payments', 'pages::seller.payments-index')->name('payments.index');
         Route::livewire('payments/statement', 'pages::seller.payments-statement')->name('payments.statement');
     });

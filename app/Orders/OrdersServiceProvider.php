@@ -5,10 +5,12 @@ namespace App\Orders;
 use App\Coupons\Contracts\CustomerEligibilityInterface;
 use App\Orders\Adapters\OrderCustomerEligibilityAdapter;
 use App\Orders\Contracts\OrderItemsFeeLookupInterface;
+use App\Orders\Contracts\OrderRestockInterface;
 use App\Orders\Contracts\SellerOrderFulfillmentInterface;
 use App\Orders\Contracts\SellerOrderShippingDetailsLookupInterface;
 use App\Orders\Contracts\SellerOrderStatusLookupInterface;
 use App\Orders\Services\OrderItemsFeeLookupService;
+use App\Orders\Services\OrderService;
 use App\Orders\Services\SellerOrderFulfillmentService;
 use App\Orders\Services\SellerOrderShippingDetailsLookupService;
 use App\Orders\Services\SellerOrderStatusLookupService;
@@ -25,6 +27,7 @@ class OrdersServiceProvider extends ServiceProvider
         OrderItemsFeeLookupInterface::class => OrderItemsFeeLookupService::class,
         SellerOrderStatusLookupInterface::class => SellerOrderStatusLookupService::class,
         SellerOrderFulfillmentInterface::class => SellerOrderFulfillmentService::class,
+        OrderRestockInterface::class => OrderService::class,
         SellerOrderShippingDetailsLookupInterface::class => SellerOrderShippingDetailsLookupService::class,
         CustomerEligibilityInterface::class => OrderCustomerEligibilityAdapter::class,
     ];

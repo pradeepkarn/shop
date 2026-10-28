@@ -63,6 +63,18 @@ interface ShippingCarrierInterface
     public function cancelShipment(string $awb): bool;
 
     /**
+     * Request an NDR action ('reattempt' or 'rto') for an undelivered shipment.
+     *
+     * $action is "reattempt" or "rto". $payload keys (all optional, already validated by ShipmentService):
+     * phone (10 digits), address, reattempt_date (Y-m-d, business timezone), instructions.
+     * Phone, address and date are only sent for a re-attempt.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{success: bool, message: string}
+     */
+    public function requestNdrAction(string $awb, string $action, array $payload = []): array;
+
+    /**
      * Track a shipment by tracking ID / AWB.
      */
     public function track(string $awb): TrackingStatusDto;

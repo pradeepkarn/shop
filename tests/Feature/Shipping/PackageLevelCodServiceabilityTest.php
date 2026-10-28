@@ -213,6 +213,11 @@ test('carrier timeout at checkout does not block the order (fail open)', functio
         {
             return new TrackingStatusDto($awb, ShipmentStatus::Created);
         }
+
+        public function requestNdrAction(string $awb, string $action, array $payload = []): array
+        {
+            return ['success' => true, 'message' => 'mocked'];
+        }
     };
 
     $carrierManager->setDriverInstance('timeout-mock', $mockDriver);

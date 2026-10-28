@@ -24,6 +24,24 @@ interface SettlementServiceInterface
     public function voidSettlement(string $sellerOrderId): ?SellerOrderSettlement;
 
     /**
+     * Process an RTO settlement: reverse sale + fees, debit RTO shipping, and carry net negative.
+     */
+    public function processRtoSettlement(string $sellerOrderId): ?SellerOrderSettlement;
+
+    /**
+     * Confirm a lost shipment where platform absorbs loss: seller settlement continues as delivered.
+     */
+    public function confirmLostShipmentSettlement(string $sellerOrderId, int $adminId, ?string $notes = null): ?SellerOrderSettlement;
+
+    /**
+     * Release the partial delivery hold after admin confirms delivered items: reverse sale and fees for the
+     * undelivered items so the seller is paid only for what was delivered, then start the normal return window.
+     *
+     * @param  array<int>  $undeliveredOrderItemIds
+     */
+    public function releasePartialDeliveryHold(string $sellerOrderId, array $undeliveredOrderItemIds = []): ?SellerOrderSettlement;
+
+    /**
      * Release all matured on_hold settlements whose return window has passed.
      */
     public function releaseMaturedSettlements(): int;

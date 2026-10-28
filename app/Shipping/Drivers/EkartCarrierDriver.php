@@ -13,6 +13,7 @@ use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
 use Carbon\Carbon;
+use Carbon\CarbonImmutable;
 use DomainException;
 use Exception;
 use Illuminate\Http\Client\PendingRequest;
@@ -422,6 +423,109 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         return $response->successful();
     }
 
+    /**
+     * Take NDR actions for a particular shipment.
+     * Cites spec.yaml: POST /api/v2/package/ndr (actions Re-Attempt / RTO)
+     */
+    public function requestNdrAction(string $awb, string $action, array $payload = []): array
+    {
+        $normalized = strtolower(trim($action));
+        $ekartAction = match ($normalized) {
+            'reattempt', 're-attempt' => 'Re-Attempt',
+            'rto', 'return' => 'RTO',
+            default => null,
+        };
+
+        if ($ekartAction === null) {
+            return ['success' => false, 'message' => "Unsupported NDR action for Ekart: {$action}"];
+        }
+
+        // Body per docs/carriers/ekart/spec.yaml, POST /api/v2/package/ndr, schema ndr_data_v2
+        $body = [
+            'action' => $ekartAction,
+            'wbn' => $awb,
+        ];
+
+        if ($ekartAction === 'Re-Attempt') {
+            try {
+                $body['date'] = $this->reattemptDateMs((string) ($payload['reattempt_date'] ?? ''));
+            } catch (DomainException $e) {
+                return ['success' => false, 'message' => $e->getMessage()];
+            }
+
+            if (! empty($payload['phone'])) {
+                $phone = (string) $payload['phone'];
+                if (! preg_match('/^\d{10}$/', $phone)) {
+                    return ['success' => false, 'message' => 'Ekart requires the updated phone to be exactly 10 digits.'];
+                }
+                $body['phone'] = $phone;
+            }
+
+            if (! empty($payload['address'])) {
+                $body['address'] = (string) $payload['address'];
+            }
+        }
+
+        if (! empty($payload['instructions'])) {
+            $body['instructions'] = (string) $payload['instructions'];
+        }
+
+        if ($this->safeMode) {
+            Log::info("Safe Mode: Ekart NDR action [{$ekartAction}] simulated for AWB {$awb}.", $body);
+
+            return [
+                'success' => true,
+                'message' => "Safe Mode: NDR action [{$ekartAction}] simulated for AWB {$awb}.",
+            ];
+        }
+
+        try {
+            $response = $this->client()->post('/api/v2/package/ndr', $body);
+            if ($response->successful()) {
+                return [
+                    'success' => true,
+                    'message' => "NDR action [{$ekartAction}] processed successfully by Ekart.",
+                ];
+            }
+
+            Log::error("Ekart NDR action failed for AWB {$awb}: ".$response->body(), $body);
+
+            return [
+                'success' => false,
+                'message' => 'Ekart NDR error: '.$response->body(),
+            ];
+        } catch (\Throwable $e) {
+            Log::error("Ekart NDR request exception for AWB {$awb}: ".$e->getMessage());
+
+            return [
+                'success' => false,
+                'message' => 'Ekart NDR exception: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Ekart ndr_data_v2.date: re-attempt date in ms since epoch, within seven days of the
+     * current day, excluding today. Days are counted in the business timezone (IST).
+     */
+    protected function reattemptDateMs(string $date): int
+    {
+        $timezone = (string) config('app.display_timezone', 'Asia/Kolkata');
+
+        if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            throw new DomainException('Ekart re-attempt needs a date (YYYY-MM-DD) between tomorrow and 7 days from today.');
+        }
+
+        $day = CarbonImmutable::createFromFormat('!Y-m-d', $date, $timezone);
+        $today = CarbonImmutable::now($timezone)->startOfDay();
+
+        if (! $day || $day->format('Y-m-d') !== $date || $day->lte($today) || $day->gt($today->addDays(7))) {
+            throw new DomainException("Ekart re-attempt date must be between {$today->addDay()->format('d M Y')} and {$today->addDays(7)->format('d M Y')} (today is not allowed).");
+        }
+
+        return $day->getTimestamp() * 1000;
+    }
+
     public function track(string $awb): TrackingStatusDto
     {
         $response = $this->client()->get("/api/v1/track/{$awb}");
@@ -437,7 +541,7 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         $location = $track['location'] ?? null;
         $description = $track['desc'] ?? null;
 
-        $occurredAt = ! empty($track['ctime']) ? Carbon::createFromTimestampMs($track['ctime']) : now();
+        $occurredAt = ! empty($track['ctime']) ? Carbon::createFromTimestampMs($track['ctime']) : null;
         $edd = ! empty($data['edd']) ? Carbon::createFromTimestampMs($data['edd']) : null;
         $pickedUpAt = ! empty($track['pickupTime']) ? Carbon::createFromTimestampMs($track['pickupTime']) : null;
 

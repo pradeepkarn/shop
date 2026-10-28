@@ -16,6 +16,7 @@ use App\Mail\SellerNewOrderMail;
 use App\Models\CustomerAddress;
 use App\Models\Listing;
 use App\Models\User;
+use App\Orders\Contracts\OrderRestockInterface;
 use App\Orders\DTOs\PlaceOrderData;
 use App\Orders\Enums\OrderStatus;
 use App\Orders\Enums\PaymentMethod;
@@ -24,6 +25,7 @@ use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Events\OrderPlaced;
 use App\Orders\Events\SellerOrderCancelled;
 use App\Orders\Events\SellerOrderDelivered;
+use App\Orders\Events\SellerOrderReturnedToOrigin;
 use App\Orders\Events\SellerOrderShipped;
 use App\Orders\Models\Order;
 use App\Orders\Models\OrderItem;
@@ -36,7 +38,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
-class OrderService
+class OrderService implements OrderRestockInterface
 {
     /**
      * Place an order from PlaceOrderData in a single database transaction.
@@ -414,7 +416,8 @@ class OrderService
                     $updates['courier_name'] = $courierName,
                     $updates['tracking_number'] = $trackingNumber,
                 ],
-                SellerOrderStatus::Delivered => $updates['delivered_at'] = now(),
+                SellerOrderStatus::Delivered, SellerOrderStatus::PartiallyDelivered => $updates['delivered_at'] = now(),
+                SellerOrderStatus::ReturnedToOrigin => $updates['rto_delivered_at'] = now(),
                 SellerOrderStatus::Cancelled => [
                     $updates['cancelled_at'] = now(),
                     $updates['cancellation_reason'] = $reason,
@@ -458,6 +461,12 @@ class OrderService
                         timestamp: $timestamp,
                         actorType: $actorType,
                         actorId: $actorId,
+                    )),
+                    SellerOrderStatus::ReturnedToOrigin => event(new SellerOrderReturnedToOrigin(
+                        sellerOrderId: (string) $sellerOrder->id,
+                        orderId: (string) $sellerOrder->order_id,
+                        sellerProfileId: $profileId,
+                        reason: $reason,
                     )),
                     SellerOrderStatus::Cancelled => event(new SellerOrderCancelled(
                         sellerOrderId: (string) $sellerOrder->id,
@@ -527,6 +536,43 @@ class OrderService
     }
 
     /**
+     * Restock inventory for items in a seller order and refresh buy box.
+     *
+     * @param  array<int>|null  $orderItemIds
+     */
+    public function restockSellerOrder(string $sellerOrderId, ?array $orderItemIds = null): void
+    {
+        /** @var SellerOrder $sellerOrder */
+        $sellerOrder = SellerOrder::with('items')->findOrFail($sellerOrderId);
+
+        $affectedProductIds = [];
+
+        DB::transaction(function () use ($sellerOrder, $orderItemIds, &$affectedProductIds) {
+            foreach ($sellerOrder->items as $item) {
+                if ($orderItemIds !== null && ! in_array($item->id, $orderItemIds, true)) {
+                    continue;
+                }
+
+                if ($item->listing_id) {
+                    Listing::where('id', $item->listing_id)->increment('stock', $item->qty);
+
+                    /** @var Listing|null $listing */
+                    $listing = Listing::with('variant')->find($item->listing_id);
+                    if ($listing?->variant?->product_id) {
+                        $affectedProductIds[] = $listing->variant->product_id;
+                    }
+                }
+            }
+        });
+
+        // Refresh buy boxes for restocked products
+        $buyBoxService = app(ProductBuyBoxService::class);
+        foreach (array_unique($affectedProductIds) as $pId) {
+            $buyBoxService->refresh($pId);
+        }
+    }
+
+    /**
      * Update parent Order status based on all child seller orders.
      */
     public function updateParentOrderStatus(Order $order): void
@@ -536,9 +582,11 @@ class OrderService
             return;
         }
 
-        $allCancelled = $sellerOrders->every(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Cancelled);
-        $anyCancelled = $sellerOrders->contains(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Cancelled);
-        $allDelivered = $sellerOrders->every(fn (SellerOrder $so) => $so->status === SellerOrderStatus::Delivered);
+        // RTO and lost packages close like a cancellation for the customer: nothing to collect.
+        // A partially delivered package counts as delivered (COD is collected for the delivered items).
+        $allCancelled = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isClosedUndelivered());
+        $anyCancelled = $sellerOrders->contains(fn (SellerOrder $so) => $so->status->isClosedUndelivered());
+        $allDelivered = $sellerOrders->every(fn (SellerOrder $so) => $so->status->isDeliveredToCustomer());
 
         if ($allCancelled) {
             $order->status = OrderStatus::Cancelled;

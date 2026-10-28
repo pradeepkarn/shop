@@ -184,6 +184,110 @@ class SellerLedgerService implements SellerLedgerServiceInterface
         });
     }
 
+    public function recordRtoReversalsForSettlement(SellerOrderSettlement $settlement): void
+    {
+        $now = CarbonImmutable::now();
+
+        $rtoShippingSourceKey = "settlement:{$settlement->seller_order_id}:rto_shipping";
+
+        DB::transaction(function () use ($settlement, $now, $rtoShippingSourceKey) {
+            // Exclude the RTO debit itself so a re-run neither reverses it nor counts it as forward shipping
+            $existingEntries = SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
+                ->where('type', '!=', LedgerEntryType::Reversal->value)
+                ->where('source_key', '!=', $rtoShippingSourceKey)
+                ->get();
+
+            $forwardShippingPaise = 0;
+
+            foreach ($existingEntries as $entry) {
+                // If this is the forward shipping fee debit, KEEP IT (do not reverse)
+                if ($entry->type === LedgerEntryType::ShippingFee) {
+                    $forwardShippingPaise += abs($entry->amount);
+
+                    continue;
+                }
+
+                $reversalSourceKey = "reversal:{$entry->source_key}";
+
+                $this->createEntryIfNotExists([
+                    'seller_profile_id' => $entry->seller_profile_id,
+                    'seller_order_id' => $entry->seller_order_id,
+                    'order_item_id' => $entry->order_item_id,
+                    'payout_id' => null,
+                    'type' => LedgerEntryType::Reversal,
+                    'amount' => -$entry->amount,
+                    'description' => "Reversal: {$entry->description}",
+                    'source_key' => $reversalSourceKey,
+                    'created_at' => $now,
+                ]);
+            }
+
+            // Debit RTO shipping fee: forward shipping fee × multiplier
+            $multiplier = (float) config('returns.rto_shipping_multiplier', 1.0);
+            $rtoShippingPaise = (int) round($forwardShippingPaise * $multiplier);
+
+            if ($rtoShippingPaise > 0) {
+                $this->createEntryIfNotExists([
+                    'seller_profile_id' => $settlement->seller_profile_id,
+                    'seller_order_id' => $settlement->seller_order_id,
+                    'order_item_id' => null,
+                    'payout_id' => null,
+                    'type' => LedgerEntryType::ShippingFee,
+                    'amount' => -$rtoShippingPaise,
+                    'description' => "RTO return shipping fee for order {$settlement->seller_order_id} (multiplier: {$multiplier})",
+                    'source_key' => $rtoShippingSourceKey,
+                    'created_at' => $now,
+                ]);
+            }
+        });
+    }
+
+    public function recordPartialDeliveryReversals(SellerOrderSettlement $settlement, array $undeliveredOrderItemIds): array
+    {
+        $reversed = ['sale' => 0, 'net' => 0];
+
+        if ($undeliveredOrderItemIds === []) {
+            return $reversed;
+        }
+
+        $now = CarbonImmutable::now();
+
+        DB::transaction(function () use ($settlement, $undeliveredOrderItemIds, $now, &$reversed) {
+            $entries = SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
+                ->whereIn('order_item_id', $undeliveredOrderItemIds)
+                ->whereNotIn('type', [
+                    LedgerEntryType::Reversal->value,
+                    LedgerEntryType::ShippingFee->value,
+                    LedgerEntryType::Payout->value,
+                    LedgerEntryType::Adjustment->value,
+                ])
+                ->get();
+
+            foreach ($entries as $entry) {
+                $created = $this->createEntryIfNotExists([
+                    'seller_profile_id' => $entry->seller_profile_id,
+                    'seller_order_id' => $entry->seller_order_id,
+                    'order_item_id' => $entry->order_item_id,
+                    'payout_id' => null,
+                    'type' => LedgerEntryType::Reversal,
+                    'amount' => -$entry->amount,
+                    'description' => "Reversal (not delivered): {$entry->description}",
+                    'source_key' => "reversal:{$entry->source_key}",
+                    'created_at' => $now,
+                ]);
+
+                if ($created) {
+                    $reversed['net'] -= $entry->amount;
+                    if ($entry->type === LedgerEntryType::Sale) {
+                        $reversed['sale'] += $entry->amount;
+                    }
+                }
+            }
+        });
+
+        return $reversed;
+    }
+
     public function getSellerBalance(int $sellerId): SellerBalanceDto
     {
         $onHoldPaise = (int) SellerOrderSettlement::where('seller_profile_id', $sellerId)
@@ -210,7 +314,10 @@ class SellerLedgerService implements SellerLedgerServiceInterface
 
         $carriedNegativePaise = 0;
         if ($adjustmentsSum < 0) {
-            $carriedNegativePaise = abs($adjustmentsSum);
+            $carriedNegativePaise += abs($adjustmentsSum);
+        }
+        if ($eligibleSettlementsPaise < 0) {
+            $carriedNegativePaise += abs($eligibleSettlementsPaise);
         }
 
         $effectiveEligiblePaise = max(0, $eligibleSettlementsPaise - $carriedNegativePaise);
@@ -242,11 +349,11 @@ class SellerLedgerService implements SellerLedgerServiceInterface
     /**
      * @param  array<string, mixed>  $data
      */
-    private function createEntryIfNotExists(array $data): void
+    private function createEntryIfNotExists(array $data): bool
     {
-        SellerLedgerEntry::firstOrCreate(
+        return SellerLedgerEntry::firstOrCreate(
             ['source_key' => $data['source_key']],
             $data
-        );
+        )->wasRecentlyCreated;
     }
 }

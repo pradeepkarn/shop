@@ -7,18 +7,27 @@ use App\Orders\Contracts\SellerOrderShippingDetailsLookupInterface;
 use App\Sellers\Contracts\SellerPickupAddressLookupInterface;
 use App\Shipping\Contracts\CarrierManagerInterface;
 use App\Shipping\Contracts\ShipmentServiceInterface;
+use App\Shipping\Drivers\FakeCarrierDriver;
 use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use App\Shipping\DTOs\CreateShipmentRequestDto;
 use App\Shipping\DTOs\TrackingStatusDto;
+use App\Shipping\Enums\ShipmentEventType;
 use App\Shipping\Enums\ShipmentStatus;
+use App\Shipping\Events\ShipmentDeliveryFailed;
+use App\Shipping\Events\ShipmentLost;
+use App\Shipping\Events\ShipmentPartialDelivered;
+use App\Shipping\Events\ShipmentRtoDelivered;
+use App\Shipping\Events\ShipmentRtoInitiated;
 use App\Shipping\Models\SellerShippingProfile;
 use App\Shipping\Models\Shipment;
 use App\Shipping\Models\ShipmentEvent;
 use Carbon\Carbon;
 use DomainException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class ShipmentService implements ShipmentServiceInterface
 {
@@ -97,6 +106,7 @@ class ShipmentService implements ShipmentServiceInterface
                 'height_cm' => $heightCm,
                 'is_cod' => $details->isCod,
                 'cod_amount_paise' => $details->codAmountPaise,
+                'declared_value_paise' => $details->grandTotalPaise,
                 'pickup_date' => $pickupDate,
             ]);
         }
@@ -145,6 +155,7 @@ class ShipmentService implements ShipmentServiceInterface
                 'height_cm' => $heightCm,
                 'is_cod' => $details->isCod,
                 'cod_amount_paise' => $details->codAmountPaise,
+                'declared_value_paise' => $details->grandTotalPaise,
                 'pickup_date' => $pickupDate,
                 'estimated_carrier_charges_paise' => $response->estimatedChargesPaise,
                 'raw_metadata' => $response->rawResponse,
@@ -168,12 +179,12 @@ class ShipmentService implements ShipmentServiceInterface
                 }
             }
 
-            // Create initial event if not created
-            $eventKey = "{$targetShipment->id}:created:".time();
+            // Create initial event if not created (once per shipment, so the key needs no timestamp)
             if (! ShipmentEvent::where('shipment_id', $targetShipment->id)->where('status', ShipmentStatus::Created)->exists()) {
                 ShipmentEvent::create([
                     'shipment_id' => $targetShipment->id,
-                    'event_key' => $eventKey,
+                    'event_key' => "{$targetShipment->id}:created",
+                    'event_type' => ShipmentEventType::ShipmentCreated,
                     'provider' => $driver->name(),
                     'status' => ShipmentStatus::Created,
                     'provider_status' => 'Created',
@@ -224,7 +235,8 @@ class ShipmentService implements ShipmentServiceInterface
 
             ShipmentEvent::create([
                 'shipment_id' => $shipment->id,
-                'event_key' => "{$shipment->id}:cancelled:".time(),
+                'event_key' => "{$shipment->id}:cancelled",
+                'event_type' => ShipmentEventType::ShipmentCancelled,
                 'provider' => $shipment->provider,
                 'status' => ShipmentStatus::Cancelled,
                 'provider_status' => 'Cancelled',
@@ -257,27 +269,64 @@ class ShipmentService implements ShipmentServiceInterface
 
     public function recordShipmentEvent(Shipment $shipment, TrackingStatusDto $trackingDto): ?ShipmentEvent
     {
-        $occurredTimestamp = $trackingDto->occurredAt ? $trackingDto->occurredAt->getTimestamp() : time();
-        $eventKey = "{$shipment->id}:{$trackingDto->status->value}:{$occurredTimestamp}";
+        $eventKey = $this->courierEventKey($shipment, $trackingDto);
 
-        // Idempotency deduplication by event_key
+        // Idempotency: a courier event already recorded (webhook redelivery, repeated poll) is ignored
         $existing = ShipmentEvent::where('event_key', $eventKey)->first();
         if ($existing) {
             return $existing;
         }
 
+        try {
+            return $this->storeCourierEvent($shipment, $trackingDto, $eventKey);
+        } catch (UniqueConstraintViolationException) {
+            // A concurrent delivery of the same courier event won the insert
+            return ShipmentEvent::where('event_key', $eventKey)->first();
+        }
+    }
+
+    /**
+     * Build the dedup key from the courier's own data, never from our clock: the courier's
+     * event id when it sends one, otherwise a fingerprint of the scan (status, courier
+     * timestamp and scan details).
+     */
+    protected function courierEventKey(Shipment $shipment, TrackingStatusDto $trackingDto): string
+    {
+        if ($trackingDto->providerEventId !== null && $trackingDto->providerEventId !== '') {
+            $eventId = strlen($trackingDto->providerEventId) > 100
+                ? sha1($trackingDto->providerEventId)
+                : $trackingDto->providerEventId;
+
+            return "{$shipment->id}:{$shipment->provider}:{$eventId}";
+        }
+
+        $fingerprint = sha1((string) json_encode([
+            $trackingDto->status->value,
+            $trackingDto->providerStatus,
+            $trackingDto->providerNdrStatus,
+            $trackingDto->occurredAt?->format('Y-m-d\TH:i:s.uP'),
+            $trackingDto->location,
+            $trackingDto->description,
+        ]));
+
+        return "{$shipment->id}:{$trackingDto->status->value}:{$fingerprint}";
+    }
+
+    protected function storeCourierEvent(Shipment $shipment, TrackingStatusDto $trackingDto, string $eventKey): ShipmentEvent
+    {
         return DB::transaction(function () use ($shipment, $trackingDto, $eventKey) {
             /** @var ShipmentEvent $event */
             $event = ShipmentEvent::create([
                 'shipment_id' => $shipment->id,
                 'event_key' => $eventKey,
+                'event_type' => ShipmentEventType::CourierUpdate,
                 'provider' => $shipment->provider,
                 'status' => $trackingDto->status,
                 'provider_status' => $trackingDto->providerStatus,
                 'provider_ndr_status' => $trackingDto->providerNdrStatus,
                 'location' => $trackingDto->location,
                 'description' => $trackingDto->description,
-                'occurred_at' => $trackingDto->occurredAt,
+                'occurred_at' => $trackingDto->occurredAt ?? now(),
                 'received_at' => now(),
                 'raw_payload' => $trackingDto->rawResponse,
             ]);
@@ -301,15 +350,223 @@ class ShipmentService implements ShipmentServiceInterface
                 );
             }
 
+            if ($trackingDto->status === ShipmentStatus::DeliveryFailed) {
+                $updates['ndr_attempt_count'] = ($shipment->ndr_attempt_count ?? 0) + 1;
+                $updates['latest_ndr_reason'] = $trackingDto->description ?? $trackingDto->providerNdrStatus ?? 'Delivery attempt failed';
+            }
+
             if ($trackingDto->status === ShipmentStatus::RtoDelivered) {
-                // RTO delivered has no settlement modification in this phase
                 $this->orderFulfillment->markReturnedToOrigin(
                     sellerOrderId: $shipment->seller_order_id,
                     reason: $trackingDto->description ?? 'RTO Delivered to seller',
                 );
             }
 
+            if ($trackingDto->status === ShipmentStatus::PartialDelivered) {
+                // Keep settlement on hold via Orders contract event
+                $this->orderFulfillment->markPartialDelivered($shipment->seller_order_id, $trackingDto->description);
+            }
+
             $shipment->update($updates);
+
+            // Fire domain events after DB transaction commit
+            DB::afterCommit(function () use ($shipment, $trackingDto, $updates) {
+                match ($trackingDto->status) {
+                    ShipmentStatus::DeliveryFailed => event(new ShipmentDeliveryFailed(
+                        shipmentId: (string) $shipment->id,
+                        sellerOrderId: (string) $shipment->seller_order_id,
+                        attemptCount: (int) ($updates['ndr_attempt_count'] ?? 1),
+                        reason: $updates['latest_ndr_reason'] ?? null,
+                    )),
+                    ShipmentStatus::RtoInitiated => event(new ShipmentRtoInitiated(
+                        shipmentId: (string) $shipment->id,
+                        sellerOrderId: (string) $shipment->seller_order_id,
+                        reason: $trackingDto->description,
+                    )),
+                    ShipmentStatus::RtoDelivered => event(new ShipmentRtoDelivered(
+                        shipmentId: (string) $shipment->id,
+                        sellerOrderId: (string) $shipment->seller_order_id,
+                        reason: $trackingDto->description,
+                    )),
+                    ShipmentStatus::Lost => event(new ShipmentLost(
+                        shipmentId: (string) $shipment->id,
+                        sellerOrderId: (string) $shipment->seller_order_id,
+                        reason: $trackingDto->description,
+                    )),
+                    ShipmentStatus::PartialDelivered => event(new ShipmentPartialDelivered(
+                        shipmentId: (string) $shipment->id,
+                        sellerOrderId: (string) $shipment->seller_order_id,
+                        deliveredItemIds: $shipment->partial_delivery_data['delivered_item_ids'] ?? [],
+                        undeliveredItemIds: $shipment->partial_delivery_data['undelivered_item_ids'] ?? [],
+                    )),
+                    default => null,
+                };
+            });
+
+            return $event;
+        });
+    }
+
+    public function actionNdr(string $shipmentId, string $action, array $payload = []): array
+    {
+        /** @var Shipment $shipment */
+        $shipment = Shipment::findOrFail($shipmentId);
+
+        if ($shipment->status !== ShipmentStatus::DeliveryFailed) {
+            throw new DomainException('NDR actions can only be taken on shipments in Delivery Failed (NDR) status.');
+        }
+
+        $normalized = strtolower(trim($action));
+        $normalized = match ($normalized) {
+            'reattempt', 're-attempt' => 'reattempt',
+            'rto', 'return' => 'rto',
+            default => throw new DomainException("Unsupported NDR action: {$action}"),
+        };
+
+        // Contact/address/date changes only apply to a re-attempt; an RTO carries instructions at most
+        $carrierPayload = array_filter([
+            'instructions' => trim((string) ($payload['instructions'] ?? '')),
+        ]);
+
+        if ($normalized === 'reattempt') {
+            $phone = trim((string) ($payload['phone'] ?? ''));
+            if ($phone !== '') {
+                $phone = $this->normalizeIndianMobile($phone);
+            }
+
+            $carrierPayload += array_filter([
+                'phone' => $phone,
+                'address' => trim((string) ($payload['address'] ?? '')),
+                'reattempt_date' => trim((string) ($payload['reattempt_date'] ?? '')),
+            ]);
+        }
+
+        $driver = $this->carrierManager->driver($shipment->provider);
+        $result = $driver->requestNdrAction($shipment->awb ?: $shipment->id, $normalized, $carrierPayload);
+
+        if (! $result['success']) {
+            return $result;
+        }
+
+        // Updated contact details live on the shipment only; the customer's saved addresses are never touched
+        $shipment->update([
+            'ndr_action' => $normalized,
+            'ndr_actioned_at' => now(),
+            'ndr_updated_phone' => $carrierPayload['phone'] ?? $shipment->ndr_updated_phone,
+            'ndr_updated_address' => $carrierPayload['address'] ?? $shipment->ndr_updated_address,
+        ]);
+
+        // Sync tracking to reflect the updated state immediately
+        $this->syncTracking($shipment);
+
+        return $result;
+    }
+
+    /**
+     * Both carriers accept exactly 10 digits; strip formatting and a +91/0 prefix, reject anything else.
+     */
+    protected function normalizeIndianMobile(string $phone): string
+    {
+        $digits = (string) preg_replace('/\D/', '', $phone);
+
+        if (strlen($digits) === 12 && str_starts_with($digits, '91')) {
+            $digits = substr($digits, 2);
+        } elseif (strlen($digits) === 11 && str_starts_with($digits, '0')) {
+            $digits = substr($digits, 1);
+        }
+
+        if (strlen($digits) !== 10) {
+            throw new DomainException('Updated phone must be a 10-digit mobile number.');
+        }
+
+        return $digits;
+    }
+
+    public function simulateStatusTransition(
+        string $shipmentId,
+        ShipmentStatus $status,
+        array $extra = []
+    ): ShipmentEvent {
+        if (! config('shipping.fake_simulation_enabled', false)) {
+            throw new DomainException('Fake carrier simulation is disabled.');
+        }
+
+        /** @var Shipment $shipment */
+        $shipment = Shipment::findOrFail($shipmentId);
+
+        if ($shipment->provider !== 'fake') {
+            throw new DomainException('Simulation is only allowed for shipments using the fake carrier.');
+        }
+
+        if (! in_array($status, $shipment->status->nextForwardStatuses(), true)) {
+            throw new DomainException("Cannot simulate {$status->label()} from {$shipment->status->label()}.");
+        }
+
+        $driver = $this->carrierManager->driver('fake');
+        if (! ($driver instanceof FakeCarrierDriver)) {
+            throw new DomainException('Fake driver not active.');
+        }
+
+        $reason = $extra['reason'] ?? null;
+        $location = $extra['location'] ?? null;
+
+        $trackingDto = $driver->simulateStatusChange($shipment->awb ?: $shipment->id, $status, $reason, $location);
+
+        if ($status === ShipmentStatus::PartialDelivered && ! empty($extra['partial_delivery_data'])) {
+            $shipment->update(['partial_delivery_data' => $extra['partial_delivery_data']]);
+        }
+
+        /** @var ShipmentEvent $event */
+        $event = $this->recordShipmentEvent($shipment, $trackingDto);
+
+        return $event;
+    }
+
+    public function resolvePartialDelivery(
+        string $shipmentId,
+        array $deliveredItemIds,
+        array $undeliveredItemIds,
+        int $adminId,
+        ?string $notes = null
+    ): ShipmentEvent {
+        return DB::transaction(function () use ($shipmentId, $deliveredItemIds, $undeliveredItemIds, $adminId, $notes) {
+            /** @var Shipment $shipment */
+            $shipment = Shipment::lockForUpdate()->findOrFail($shipmentId);
+
+            if ($shipment->status !== ShipmentStatus::PartialDelivered) {
+                throw new DomainException('Delivered items can only be confirmed for a shipment the courier marked as Partially Delivered.');
+            }
+
+            if (! empty($shipment->partial_delivery_data['resolved_at'])) {
+                throw new DomainException('Delivered items for this shipment have already been confirmed.');
+            }
+
+            $resolution = [
+                'delivered_item_ids' => array_values($deliveredItemIds),
+                'undelivered_item_ids' => array_values($undeliveredItemIds),
+                'resolved_by_admin_id' => $adminId,
+                'resolved_at' => now()->toIso8601String(),
+                'notes' => $notes,
+            ];
+
+            // Shipment status stays PartialDelivered (the courier's verdict); only the admin's resolution is added
+            $shipment->update([
+                'partial_delivery_data' => array_merge($shipment->partial_delivery_data ?? [], $resolution),
+            ]);
+
+            /** @var ShipmentEvent $event */
+            $event = ShipmentEvent::create([
+                'shipment_id' => $shipment->id,
+                'event_key' => "{$shipment->id}:partial_delivery_resolved:".Str::ulid(),
+                'event_type' => ShipmentEventType::PartialDeliveryResolved,
+                'provider' => $shipment->provider,
+                'status' => ShipmentStatus::PartialDelivered,
+                'provider_status' => 'Partial Delivery Confirmed',
+                'description' => 'Delivered items confirmed: '.count($deliveredItemIds).' delivered, '.count($undeliveredItemIds).' not delivered',
+                'occurred_at' => now(),
+                'received_at' => now(),
+                'raw_payload' => $resolution,
+            ]);
 
             return $event;
         });

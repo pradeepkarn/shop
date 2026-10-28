@@ -234,6 +234,17 @@
                     </a>
                     @endcan
 
+                    @can('returns.view')
+                    <a href="{{ route('admin.returns.index') }}"
+                       wire:navigate
+                       class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition {{ request()->routeIs('admin.returns.*') ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-white font-semibold' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-white' }}">
+                        <svg class="size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                        </svg>
+                        <span>Returns &amp; Claims</span>
+                    </a>
+                    @endcan
+
                     @can('branding.view')
                     <a href="{{ route('admin.settings.branding') }}"
                        wire:navigate
@@ -542,6 +553,17 @@
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                         </svg>
                         <span>Shipping Settings</span>
+                    </a>
+                    @endcan
+
+                    @can('returns.view')
+                    <a href="{{ route('admin.returns.index') }}"
+                       wire:navigate
+                       class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition {{ request()->routeIs('admin.returns.*') ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-white font-semibold' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-white' }}">
+                        <svg class="size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                        </svg>
+                        <span>Returns &amp; Claims</span>
                     </a>
                     @endcan
 
