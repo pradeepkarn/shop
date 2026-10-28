@@ -27,6 +27,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Fake Carrier Simulation
+    |--------------------------------------------------------------------------
+    | When enabled, allows admin to advance shipments through simulated statuses.
+    | Defaults to false in production/normal environments; enable locally via .env.
+    |
+    */
+
+    'fake_simulation_enabled' => (bool) env('SHIPPING_FAKE_SIMULATION_ENABLED', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Serviceability Cache TTL
     |--------------------------------------------------------------------------
     |

@@ -740,6 +740,69 @@ class ShiprocketCarrierDriver implements ShippingCarrierInterface
     }
 
     /**
+     * Request an NDR action on Shiprocket.
+     * Cites Postman collection item: "Action NDR" (POST {{url}}/v1/external/ndr/{awb}/action)
+     */
+    public function requestNdrAction(string $awb, string $action, array $payload = []): array
+    {
+        $normalized = strtolower(trim($action));
+        $srAction = ($normalized === 'rto' || $normalized === 'return') ? 'return' : 're-attempt';
+
+        $body = [
+            'action' => $srAction,
+            'comments' => $payload['comments'] ?? $payload['instructions'] ?? ($srAction === 'return' ? 'RTO requested by admin' : 'Re-attempt requested by admin'),
+        ];
+
+        if (! empty($payload['phone'])) {
+            $digits = preg_replace('/\D/', '', (string) $payload['phone']);
+            if (strlen($digits) === 10) {
+                $body['phone'] = $digits;
+            }
+        }
+
+        if (! empty($payload['address'])) {
+            $body['address1'] = (string) $payload['address'];
+        }
+
+        if (! empty($payload['deferred_date'])) {
+            $body['deferred_date'] = (string) $payload['deferred_date'];
+        }
+
+        if ($this->safeMode) {
+            Log::info("Safe Mode: Shiprocket Action NDR [{$srAction}] simulated for AWB {$awb}.", $body);
+
+            return [
+                'success' => true,
+                'message' => "Safe Mode: Shiprocket Action NDR [{$srAction}] simulated for AWB {$awb}.",
+            ];
+        }
+
+        try {
+            $response = $this->client()->post("/v1/external/ndr/{$awb}/action", $body);
+            if ($response->successful()) {
+                return [
+                    'success' => true,
+                    'message' => "Shiprocket Action NDR [{$srAction}] submitted successfully.",
+                ];
+            }
+
+            Log::error("Shiprocket Action NDR failed for AWB {$awb}: ".$response->body(), $body);
+
+            return [
+                'success' => false,
+                'message' => 'Shiprocket Action NDR failed: '.$response->body(),
+            ];
+        } catch (\Throwable $e) {
+            Log::error("Shiprocket Action NDR exception for AWB {$awb}: ".$e->getMessage());
+
+            return [
+                'success' => false,
+                'message' => 'Shiprocket Action NDR exception: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Map Shiprocket status code/label to normalized domain ShipmentStatus enum.
      * Returns null if status causes no domain transition (e.g. Code 16 Cancellation Requested).
      */

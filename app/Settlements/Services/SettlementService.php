@@ -165,12 +165,79 @@ class SettlementService implements SettlementServiceInterface
         return $settlement->fresh();
     }
 
+    public function processRtoSettlement(string $sellerOrderId): ?SellerOrderSettlement
+    {
+        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        if (! $settlement) {
+            return null;
+        }
+
+        DB::transaction(function () use ($settlement) {
+            // Record RTO reversals (reverse sale & fees, keep forward shipping, debit RTO shipping)
+            $this->ledgerService->recordRtoReversalsForSettlement($settlement);
+
+            // Compute total shipping debited (forward + RTO)
+            $sumAmount = (int) SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
+                ->where('type', LedgerEntryType::ShippingFee->value)
+                ->sum('amount');
+            $totalShippingDebit = abs($sumAmount);
+
+            // RTO settlement must not end as Void with uncollected charges (requirement #1)
+            // It becomes Eligible with net negative payout = -$totalShippingDebit
+            $settlement->update([
+                'status' => SettlementStatus::Eligible,
+                'gross_amount' => 0,
+                'total_deductions' => $totalShippingDebit,
+                'net_payout' => -$totalShippingDebit,
+                'hold_until' => null,
+            ]);
+        });
+
+        return $settlement->fresh();
+    }
+
+    public function confirmLostShipmentSettlement(string $sellerOrderId, int $adminId, ?string $notes = null): ?SellerOrderSettlement
+    {
+        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        if (! $settlement) {
+            return null;
+        }
+
+        $timezone = (string) config('settlements.timezone', 'Asia/Kolkata');
+        $now = CarbonImmutable::now($timezone);
+
+        DB::transaction(function () use ($settlement, $now) {
+            $settlement->update([
+                'status' => SettlementStatus::OnHold,
+                'is_partial_delivery_hold' => false,
+                'hold_until' => $now->addDays($settlement->return_window_days ?? 7),
+            ]);
+        });
+
+        return $settlement->fresh();
+    }
+
+    public function releasePartialDeliveryHold(string $sellerOrderId): ?SellerOrderSettlement
+    {
+        $settlement = SellerOrderSettlement::where('seller_order_id', $sellerOrderId)->first();
+        if (! $settlement) {
+            return null;
+        }
+
+        $settlement->update([
+            'is_partial_delivery_hold' => false,
+        ]);
+
+        return $settlement->fresh();
+    }
+
     public function releaseMaturedSettlements(): int
     {
         $timezone = (string) config('settlements.timezone', 'Asia/Kolkata');
         $now = CarbonImmutable::now($timezone);
 
         $matured = SellerOrderSettlement::where('status', SettlementStatus::OnHold)
+            ->where('is_partial_delivery_hold', false)
             ->where('hold_until', '<=', $now)
             ->get();
 

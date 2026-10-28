@@ -6,6 +6,7 @@ use App\Coupons\Contracts\CouponRedemptionInterface;
 use App\Orders\Contracts\SellerOrderFulfillmentInterface;
 use App\Orders\DTOs\SellerOrderInvoiceDto;
 use App\Orders\Enums\SellerOrderStatus;
+use App\Orders\Events\SellerOrderPartialDelivered;
 use App\Orders\Models\OrderStatusHistory;
 use App\Orders\Models\SellerInvoiceSequence;
 use App\Orders\Models\SellerOrder;
@@ -180,6 +181,20 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
                 (int) $sellerOrder->coupon_discount_total
             );
         }
+    }
+
+    public function markPartialDelivered(
+        string $sellerOrderId,
+        ?string $reason = null,
+    ): void {
+        /** @var SellerOrder $sellerOrder */
+        $sellerOrder = SellerOrder::findOrFail($sellerOrderId);
+
+        event(new SellerOrderPartialDelivered(
+            sellerOrderId: $sellerOrder->id,
+            sellerProfileId: (int) $sellerOrder->seller_profile_id,
+            reason: $reason ?? 'Carrier marked package as Partial Delivered',
+        ));
     }
 
     public function revertToPacked(

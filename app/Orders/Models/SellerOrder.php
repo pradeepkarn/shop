@@ -29,6 +29,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $packed_at
  * @property Carbon|null $shipped_at
  * @property Carbon|null $delivered_at
+ * @property Carbon|null $rto_delivered_at
  * @property Carbon|null $cancelled_at
  * @property string|null $cancellation_reason
  * @property string|null $cancelled_by_type
@@ -65,6 +66,7 @@ class SellerOrder extends Model
         'courier_name',
         'tracking_number',
         'delivered_at',
+        'rto_delivered_at',
         'cancelled_at',
         'cancellation_reason',
         'cancelled_by_type',
@@ -89,6 +91,7 @@ class SellerOrder extends Model
             'packed_at' => 'datetime',
             'shipped_at' => 'datetime',
             'delivered_at' => 'datetime',
+            'rto_delivered_at' => 'datetime',
             'cancelled_at' => 'datetime',
             'invoice_date' => 'date',
         ];

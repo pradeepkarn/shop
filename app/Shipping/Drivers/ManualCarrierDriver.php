@@ -81,6 +81,14 @@ class ManualCarrierDriver implements ShippingCarrierInterface
         return true;
     }
 
+    public function requestNdrAction(string $awb, string $action, array $payload = []): array
+    {
+        return [
+            'success' => true,
+            'message' => "Manual NDR action [{$action}] recorded.",
+        ];
+    }
+
     public function track(string $awb): TrackingStatusDto
     {
         return new TrackingStatusDto(

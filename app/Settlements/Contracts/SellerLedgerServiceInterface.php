@@ -22,6 +22,11 @@ interface SellerLedgerServiceInterface
     public function recordReversalsForSettlement(SellerOrderSettlement $settlement): void;
 
     /**
+     * Record RTO reversals: reverse sale and fees, keep forward shipping, and debit RTO shipping.
+     */
+    public function recordRtoReversalsForSettlement(SellerOrderSettlement $settlement): void;
+
+    /**
      * Compute current balances for a seller.
      */
     public function getSellerBalance(int $sellerId): SellerBalanceDto;

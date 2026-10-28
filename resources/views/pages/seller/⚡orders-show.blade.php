@@ -6,6 +6,8 @@ use App\Orders\Contracts\SellerOrderShippingDetailsLookupInterface;
 use App\Orders\Enums\SellerOrderStatus;
 use App\Orders\Models\SellerOrder;
 use App\Orders\Services\OrderService;
+use App\Returns\Contracts\ReturnsLookupInterface;
+use App\Returns\Contracts\RtoIntakeServiceInterface;
 use App\Sellers\Contracts\SellerPickupAddressLookupInterface;
 use App\Shipping\Contracts\CarrierManagerInterface;
 use App\Shipping\Contracts\ShipmentLookupInterface;
@@ -14,8 +16,11 @@ use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
+use Livewire\WithFileUploads;
 
 new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Component {
+    use WithFileUploads;
+
     public string $sellerOrderId;
 
     public bool $showCancelModal = false;
@@ -39,6 +44,13 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
     public int $boxHeightCm = 5;
 
     public ?string $boxPickupDate = null;
+
+    // RTO inspection fields
+    public string $rtoCondition = 'intact';
+
+    public string $rtoNotes = '';
+
+    public array $rtoPhotos = [];
 
     public function mount(string $sellerOrder): void
     {
@@ -273,6 +285,45 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
             session()->flash('order_success', "Warehouse registered with carrier (Alias: {$res->alias}).");
         } else {
             session()->flash('order_error', 'Warehouse registration failed: '.$res->message);
+        }
+    }
+
+    public function submitRtoInspection(RtoIntakeServiceInterface $rtoIntakeService): void
+    {
+        $order = $this->order;
+        if (! $order) {
+            return;
+        }
+
+        $this->authorize('update', $order);
+
+        $this->validate([
+            'rtoCondition' => ['required', 'string', 'in:intact,damaged,wrong_item,incomplete'],
+            'rtoNotes' => ['nullable', 'string', 'max:1000'],
+            'rtoPhotos' => ['nullable', 'array', 'max:5'],
+            'rtoPhotos.*' => ['image', 'max:5120'],
+        ]);
+
+        $storedPaths = [];
+        if (! empty($this->rtoPhotos)) {
+            foreach ($this->rtoPhotos as $file) {
+                $storedPaths[] = $file->store('rto_photos', 'public');
+            }
+        }
+
+        try {
+            $rtoIntakeService->submitRtoReport(
+                sellerOrderId: $order->id,
+                conditionStatus: $this->rtoCondition,
+                notes: $this->rtoNotes,
+                photos: $storedPaths,
+            );
+
+            session()->flash('order_success', 'RTO inspection report submitted successfully.');
+            $this->rtoPhotos = [];
+            unset($this->order);
+        } catch (\Throwable $e) {
+            session()->flash('order_error', 'Submission failed: '.$e->getMessage());
         }
     }
 }; ?>
@@ -571,6 +622,112 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
                     Cancel
                 </button>
             </div>
+        </div>
+    @endif
+
+    <!-- RTO Condition Inspection Card -->
+    @if ($sellerOrder->status === \App\Orders\Enums\SellerOrderStatus::ReturnedToOrigin)
+        @php
+            $returnsLookup = app(\App\Returns\Contracts\ReturnsLookupInterface::class);
+            $rtoReport = $returnsLookup->getRtoReportForSellerOrder($sellerOrder->id);
+            $daysAllowed = (int) config('returns.seller_rto_inspection_days', 3);
+            $rtoDeliveredAt = $sellerOrder->rto_delivered_at;
+            $deadline = $rtoDeliveredAt ? \Illuminate\Support\Carbon::parse($rtoDeliveredAt)->addDays($daysAllowed) : null;
+            $isDeadlinePassed = $deadline ? now()->isAfter($deadline) : false;
+        @endphp
+
+        <div data-test="seller-rto-card" class="rounded-2xl border border-amber-300 bg-amber-50/60 p-6 shadow-xs dark:border-amber-800 dark:bg-amber-950/30 space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-amber-200 pb-3 dark:border-amber-900/60">
+                <div>
+                    <h3 class="text-sm font-bold text-amber-950 dark:text-amber-200">
+                        Package Returned to Origin (RTO Intake)
+                    </h3>
+                    <p class="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
+                        Delivered back to your address on @datetime($rtoDeliveredAt ?: $sellerOrder->updated_at).
+                        @if (! $rtoReport && $deadline)
+                            Inspection deadline: <strong class="{{ $isDeadlinePassed ? 'text-red-600' : 'text-amber-900 dark:text-amber-100' }}">@datetime($deadline) ({{ $daysAllowed }} days)</strong>.
+                        @endif
+                    </p>
+                </div>
+
+                @if ($rtoReport)
+                    <span class="rounded-lg bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                        Condition Reported: {{ strtoupper($rtoReport->conditionStatus->value) }}
+                    </span>
+                @elseif ($isDeadlinePassed)
+                    <span class="rounded-lg bg-red-100 px-3 py-1 text-xs font-bold text-red-800 dark:bg-red-950 dark:text-red-300">
+                        Inspection Period Expired
+                    </span>
+                @else
+                    <span class="rounded-lg bg-amber-200/80 px-3 py-1 text-xs font-bold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">
+                        Action Required: Inspect & Report
+                    </span>
+                @endif
+            </div>
+
+            @if ($rtoReport)
+                <div class="text-xs space-y-2">
+                    <div>
+                        <span class="text-zinc-500">Your inspection notes:</span>
+                        <p class="font-medium text-zinc-900 dark:text-white">{{ $rtoReport->notes ?: 'None provided' }}</p>
+                    </div>
+                    @if (! empty($rtoReport->photos))
+                        <div>
+                            <span class="text-zinc-500">Uploaded photos ({{ count($rtoReport->photos) }}):</span>
+                            <div class="mt-1 flex flex-wrap gap-2">
+                                @foreach ($rtoReport->photos as $p)
+                                    <img src="{{ Storage::disk('public')->url($p) }}" class="size-16 rounded-lg object-cover border border-amber-200" alt="RTO proof" />
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
+                    <div class="pt-2">
+                        <span class="text-zinc-500">Marketplace Admin Decision:</span>
+                        <strong class="ml-1 uppercase text-zinc-900 dark:text-white">{{ $rtoReport->adminDecision->value }}</strong>
+                    </div>
+                </div>
+            @elseif ($isDeadlinePassed)
+                <p class="text-xs text-red-700 dark:text-red-400">
+                    The {{ $daysAllowed }}-day inspection window for this returned shipment has elapsed. Marketplace administration will review and decide restocking or disposal directly.
+                </p>
+            @else
+                <form wire:submit.prevent="submitRtoInspection" class="space-y-4 pt-1">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-amber-950 dark:text-amber-200 mb-1">Package / Item Condition <span class="text-red-500">*</span></label>
+                            <select wire:model="rtoCondition" data-test="rto-condition-select" class="w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white">
+                                <option value="intact">Intact / Salable condition</option>
+                                <option value="damaged">Damaged in transit / by courier</option>
+                                <option value="wrong_item">Wrong item returned</option>
+                                <option value="incomplete">Incomplete / missing parts</option>
+                            </select>
+                            @error('rtoCondition') <p class="text-red-600 text-[11px] mt-1">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-amber-950 dark:text-amber-200 mb-1">Proof Photos (Up to 5 images)</label>
+                            <input type="file" wire:model="rtoPhotos" multiple accept="image/*" class="w-full text-xs text-zinc-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-100 file:text-amber-800 hover:file:bg-amber-200" />
+                            @error('rtoPhotos.*') <p class="text-red-600 text-[11px] mt-1">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-amber-950 dark:text-amber-200 mb-1">Inspection Notes</label>
+                        <textarea wire:model="rtoNotes" rows="2" placeholder="Details about seal condition, packaging defects, or courier damage..." class="w-full rounded-lg border border-amber-300 bg-white p-2 text-xs text-zinc-900 dark:border-amber-800 dark:bg-zinc-900 dark:text-white"></textarea>
+                        @error('rtoNotes') <p class="text-red-600 text-[11px] mt-1">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="flex justify-end">
+                        <button
+                            type="submit"
+                            data-test="submit-rto-report-btn"
+                            class="rounded-xl bg-amber-600 px-5 py-2 text-xs font-bold uppercase tracking-wider text-white hover:bg-amber-700 transition shadow-xs"
+                        >
+                            Submit Inspection Report
+                        </button>
+                    </div>
+                </form>
+            @endif
         </div>
     @endif
 

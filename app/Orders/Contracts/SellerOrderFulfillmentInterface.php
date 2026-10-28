@@ -41,6 +41,14 @@ interface SellerOrderFulfillmentInterface
     ): void;
 
     /**
+     * Mark the seller order as Partial Delivered.
+     */
+    public function markPartialDelivered(
+        string $sellerOrderId,
+        ?string $reason = null,
+    ): void;
+
+    /**
      * Revert seller order status to Packed upon shipment cancellation.
      */
     public function revertToPacked(

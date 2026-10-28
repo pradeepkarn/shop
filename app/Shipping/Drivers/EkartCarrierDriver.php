@@ -422,6 +422,83 @@ class EkartCarrierDriver implements ShippingCarrierInterface
         return $response->successful();
     }
 
+    /**
+     * Take NDR actions for a particular shipment.
+     * Cites spec.yaml: POST /api/v2/package/ndr (actions Re-Attempt / RTO)
+     */
+    public function requestNdrAction(string $awb, string $action, array $payload = []): array
+    {
+        $normalized = strtolower(trim($action));
+        $ekartAction = ($normalized === 'rto' || $normalized === 'return') ? 'RTO' : 'Re-Attempt';
+
+        $body = [
+            'action' => $ekartAction,
+            'wbn' => $awb,
+        ];
+
+        if ($ekartAction === 'Re-Attempt') {
+            // date in ms within 7 days of current day, excluding today
+            $dateMs = null;
+            if (! empty($payload['date']) && is_numeric($payload['date'])) {
+                $dateMs = (int) $payload['date'];
+            } elseif (! empty($payload['days_ahead']) && is_numeric($payload['days_ahead'])) {
+                $days = min(7, max(1, (int) $payload['days_ahead']));
+                $dateMs = (int) now()->addDays($days)->startOfDay()->timestamp * 1000;
+            } else {
+                $dateMs = (int) now()->addDays(1)->startOfDay()->timestamp * 1000;
+            }
+            $body['date'] = $dateMs;
+        }
+
+        if (! empty($payload['phone'])) {
+            $digits = preg_replace('/\D/', '', (string) $payload['phone']);
+            if (strlen($digits) === 10) {
+                $body['phone'] = $digits;
+            }
+        }
+
+        if (! empty($payload['address'])) {
+            $body['address'] = (string) $payload['address'];
+        }
+
+        if (! empty($payload['instructions'])) {
+            $body['instructions'] = (string) $payload['instructions'];
+        }
+
+        if ($this->safeMode) {
+            Log::info("Safe Mode: Ekart NDR action [{$ekartAction}] simulated for AWB {$awb}.", $body);
+
+            return [
+                'success' => true,
+                'message' => "Safe Mode: NDR action [{$ekartAction}] simulated for AWB {$awb}.",
+            ];
+        }
+
+        try {
+            $response = $this->client()->post('/api/v2/package/ndr', $body);
+            if ($response->successful()) {
+                return [
+                    'success' => true,
+                    'message' => "NDR action [{$ekartAction}] processed successfully by Ekart.",
+                ];
+            }
+
+            Log::error("Ekart NDR action failed for AWB {$awb}: ".$response->body(), $body);
+
+            return [
+                'success' => false,
+                'message' => 'Ekart NDR error: '.$response->body(),
+            ];
+        } catch (\Throwable $e) {
+            Log::error("Ekart NDR request exception for AWB {$awb}: ".$e->getMessage());
+
+            return [
+                'success' => false,
+                'message' => 'Ekart NDR exception: '.$e->getMessage(),
+            ];
+        }
+    }
+
     public function track(string $awb): TrackingStatusDto
     {
         $response = $this->client()->get("/api/v1/track/{$awb}");

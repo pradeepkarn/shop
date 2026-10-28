@@ -114,6 +114,12 @@ class ShipmentLookupService implements ShipmentLookupInterface
             pickedUpAt: $shipment->picked_up_at,
             deliveredAt: $shipment->delivered_at,
             cancelledAt: $shipment->cancelled_at,
+            ndrAttemptCount: (int) ($shipment->ndr_attempt_count ?? 0),
+            latestNdrReason: $shipment->latest_ndr_reason,
+            ndrUpdatedPhone: $shipment->ndr_updated_phone,
+            ndrUpdatedAddress: $shipment->ndr_updated_address,
+            ndrAction: $shipment->ndr_action,
+            partialDeliveryData: $shipment->partial_delivery_data,
             events: $events,
         );
     }
