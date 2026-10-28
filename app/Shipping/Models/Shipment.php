@@ -195,6 +195,13 @@ class Shipment extends Model
      */
     public function nextCourierStatuses(): array
     {
-        return $this->status->nextStatusesFor($this->direction);
+        $next = $this->status->nextStatusesFor($this->direction);
+
+        // A reship already carries only the undelivered units; it is delivered, returned or lost as a whole
+        if ($this->purpose === ShipmentPurpose::Reship) {
+            $next = array_values(array_filter($next, fn (ShipmentStatus $s) => $s !== ShipmentStatus::PartialDelivered));
+        }
+
+        return $next;
     }
 }

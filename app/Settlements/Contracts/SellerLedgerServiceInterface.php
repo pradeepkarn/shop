@@ -36,6 +36,33 @@ interface SellerLedgerServiceInterface
     public function recordPartialDeliveryReversals(SellerOrderSettlement $settlement, array $undeliveredOrderItemIds): array;
 
     /**
+     * Debit reship shipping: the forward shipping originally allocated to the reshipped units x multiplier.
+     * Idempotent. Returns the total reship shipping charged.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines  order item id => units reshipped, whole line quantity
+     */
+    public function recordReshipShippingCharge(SellerOrderSettlement $reship, array $lines, float $multiplier): int;
+
+    /**
+     * Reship delivered: re-credit sale and fees for the reshipped units from the original ledger entries (the fee
+     * snapshot taken at order time) under reship:{shipment}:... keys. Idempotent. Returns totals credited.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines
+     * @return array{sale: int, net: int}
+     */
+    public function recordReshipCredits(SellerOrderSettlement $reship, array $lines): array;
+
+    /**
+     * Reship returned to origin: debit RTO shipping = reship shipping x multiplier (the phase A RTO rule).
+     */
+    public function recordReshipRtoCharge(SellerOrderSettlement $reship, float $multiplier): int;
+
+    /**
+     * Reship cancelled before shipping: reverse the reship shipping debit. Returns the amount reversed.
+     */
+    public function reverseReshipShippingCharge(SellerOrderSettlement $reship): int;
+
+    /**
      * Compute current balances for a seller.
      */
     public function getSellerBalance(int $sellerId): SellerBalanceDto;

@@ -42,6 +42,33 @@ interface SettlementServiceInterface
     public function releasePartialDeliveryHold(string $sellerOrderId, array $undeliveredOrderItemIds = []): ?SellerOrderSettlement;
 
     /**
+     * A reship of undelivered units starts its own settlement (kind reship, keyed by the reship shipment) and debits
+     * the seller the reship shipping. The window saved on the order's settlement is carried over.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines
+     */
+    public function startReshipSettlement(string $sellerOrderId, string $reshipShipmentId, array $lines): SellerOrderSettlement;
+
+    /**
+     * Reship delivered (or lost and absorbed by the platform): re-credit sale and fees for those units and hold them for
+     * the saved return window from $deliveredAt. No-op unless the reship settlement is pending.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines
+     */
+    public function completeReshipSettlement(string $reshipShipmentId, array $lines, CarbonImmutable $deliveredAt): ?SellerOrderSettlement;
+
+    /**
+     * Reship returned to origin: debit reship RTO shipping; the negative settlement becomes eligible and is carried
+     * into the seller's next payout (phase A RTO rule).
+     */
+    public function returnReshipSettlement(string $reshipShipmentId): ?SellerOrderSettlement;
+
+    /**
+     * Reship cancelled before it shipped: reverse the reship shipping debit and void the reship settlement.
+     */
+    public function cancelReshipSettlement(string $reshipShipmentId): ?SellerOrderSettlement;
+
+    /**
      * Release all matured on_hold settlements whose return window has passed.
      */
     public function releaseMaturedSettlements(): int;

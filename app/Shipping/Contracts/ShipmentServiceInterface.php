@@ -4,6 +4,7 @@ namespace App\Shipping\DTOs;
 
 namespace App\Shipping\Contracts;
 
+use App\Shipping\DTOs\ShipmentSummaryDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
 use App\Shipping\Models\Shipment;
@@ -26,7 +27,15 @@ interface ShipmentServiceInterface
     ): Shipment;
 
     /**
-     * Cancel an active shipment. Reverts seller order to Packed.
+     * Reship undelivered units of a partially delivered order: a forward shipment (purpose reship, parent = the original
+     * shipment) carrying only those units, collecting $codAmountPaise. The seller order status is not changed.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function createReshipShipment(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto;
+
+    /**
+     * Cancel an active shipment. Reverts seller order to Packed (a cancelled reship only reports the cancellation).
      */
     public function cancelShipment(
         string $shipmentId,

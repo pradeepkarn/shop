@@ -291,6 +291,135 @@ class SellerLedgerService implements SellerLedgerServiceInterface
         return $reversed;
     }
 
+    public function recordReshipShippingCharge(SellerOrderSettlement $reship, array $lines, float $multiplier): int
+    {
+        $prefix = "reship:{$reship->reference_id}:shipping_fee:";
+
+        DB::transaction(function () use ($reship, $lines, $multiplier, $prefix) {
+            foreach ($lines as $orderItemId => $line) {
+                // The forward shipping originally allocated to this line, for the reshipped units only
+                $original = (int) SellerLedgerEntry::where('source_key', "settlement:{$reship->seller_order_id}:shipping_fee:{$orderItemId}")->value('amount');
+                $charge = (int) round(abs(self::scaleToUnits($original, $line['units'], $line['line_qty'])) * $multiplier);
+
+                if ($charge > 0) {
+                    $this->createEntryIfNotExists([
+                        'seller_profile_id' => $reship->seller_profile_id,
+                        'seller_order_id' => $reship->seller_order_id,
+                        'order_item_id' => $orderItemId,
+                        'payout_id' => null,
+                        'type' => LedgerEntryType::ShippingFee,
+                        'amount' => -$charge,
+                        'description' => "Reship shipping for undelivered units ({$line['units']}, multiplier {$multiplier})",
+                        'source_key' => $prefix.$orderItemId,
+                        'created_at' => CarbonImmutable::now(),
+                    ]);
+                }
+            }
+        });
+
+        return (int) -SellerLedgerEntry::where('source_key', 'like', $prefix.'%')->sum('amount');
+    }
+
+    public function recordReshipCredits(SellerOrderSettlement $reship, array $lines): array
+    {
+        $originalPrefix = "settlement:{$reship->seller_order_id}:";
+
+        DB::transaction(function () use ($reship, $lines, $originalPrefix) {
+            // Re-post the original sale and fee entries (the fee snapshot taken at order time), never recomputed
+            $originals = SellerLedgerEntry::where('seller_order_id', $reship->seller_order_id)
+                ->whereIn('order_item_id', array_keys($lines))
+                ->where('source_key', 'like', $originalPrefix.'%')
+                ->whereNotIn('type', [
+                    LedgerEntryType::ShippingFee->value,
+                    LedgerEntryType::Reversal->value,
+                    LedgerEntryType::Payout->value,
+                    LedgerEntryType::Adjustment->value,
+                ])
+                ->get();
+
+            foreach ($originals as $entry) {
+                $line = $lines[(int) $entry->order_item_id];
+                $amount = self::scaleToUnits($entry->amount, $line['units'], $line['line_qty']);
+
+                $this->createEntryIfNotExists([
+                    'seller_profile_id' => $entry->seller_profile_id,
+                    'seller_order_id' => $entry->seller_order_id,
+                    'order_item_id' => $entry->order_item_id,
+                    'payout_id' => null,
+                    'type' => $entry->type,
+                    'amount' => $amount,
+                    'description' => "Reship delivered: {$entry->description}",
+                    'source_key' => "reship:{$reship->reference_id}:".substr($entry->source_key, strlen($originalPrefix)),
+                    'created_at' => CarbonImmutable::now(),
+                ]);
+            }
+        });
+
+        $credits = SellerLedgerEntry::where('source_key', 'like', "reship:{$reship->reference_id}:%")
+            ->where('type', '!=', LedgerEntryType::ShippingFee->value)
+            ->get();
+
+        return [
+            'sale' => (int) $credits->where('type', LedgerEntryType::Sale)->sum('amount'),
+            'net' => (int) $credits->sum('amount'),
+        ];
+    }
+
+    public function recordReshipRtoCharge(SellerOrderSettlement $reship, float $multiplier): int
+    {
+        $forward = (int) -SellerLedgerEntry::where('source_key', 'like', "reship:{$reship->reference_id}:shipping_fee:%")->sum('amount');
+        $charge = (int) round($forward * $multiplier);
+
+        if ($charge > 0) {
+            $this->createEntryIfNotExists([
+                'seller_profile_id' => $reship->seller_profile_id,
+                'seller_order_id' => $reship->seller_order_id,
+                'order_item_id' => null,
+                'payout_id' => null,
+                'type' => LedgerEntryType::ShippingFee,
+                'amount' => -$charge,
+                'description' => "Reship returned to origin: RTO shipping (multiplier {$multiplier})",
+                'source_key' => "reship:{$reship->reference_id}:rto_shipping",
+                'created_at' => CarbonImmutable::now(),
+            ]);
+        }
+
+        return (int) -SellerLedgerEntry::where('source_key', "reship:{$reship->reference_id}:rto_shipping")->sum('amount');
+    }
+
+    public function reverseReshipShippingCharge(SellerOrderSettlement $reship): int
+    {
+        $charges = SellerLedgerEntry::where('source_key', 'like', "reship:{$reship->reference_id}:shipping_fee:%")->get();
+
+        DB::transaction(function () use ($charges) {
+            foreach ($charges as $entry) {
+                $this->createEntryIfNotExists([
+                    'seller_profile_id' => $entry->seller_profile_id,
+                    'seller_order_id' => $entry->seller_order_id,
+                    'order_item_id' => $entry->order_item_id,
+                    'payout_id' => null,
+                    'type' => LedgerEntryType::Reversal,
+                    'amount' => -$entry->amount,
+                    'description' => "Reship cancelled: {$entry->description}",
+                    'source_key' => "reversal:{$entry->source_key}",
+                    'created_at' => CarbonImmutable::now(),
+                ]);
+            }
+        });
+
+        return (int) -$charges->sum('amount');
+    }
+
+    /**
+     * Share of a whole-line amount for some of its units; all units get the full amount (no rounding drift).
+     */
+    protected static function scaleToUnits(int $lineAmount, int $units, int $lineQty): int
+    {
+        return $units >= $lineQty || $lineQty <= 0
+            ? $lineAmount
+            : intdiv($lineAmount * $units, $lineQty);
+    }
+
     public function getSellerBalance(int $sellerId): SellerBalanceDto
     {
         $onHoldPaise = (int) SellerOrderSettlement::where('seller_profile_id', $sellerId)

@@ -222,7 +222,7 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
         string $sellerOrderId,
         array $deliveredItemIds,
         array $undeliveredItemIds,
-    ): void {
+    ): array {
         /** @var SellerOrder $sellerOrder */
         $sellerOrder = SellerOrder::with(['items', 'order'])->findOrFail($sellerOrderId);
 
@@ -247,7 +247,7 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
         if ($undelivered === []) {
             $this->markDelivered($sellerOrderId);
 
-            return;
+            return [];
         }
 
         // COD is collected only for the delivered items, net of their coupon discount
@@ -266,6 +266,34 @@ class SellerOrderFulfillmentService implements SellerOrderFulfillmentInterface
             actorId: 0,
             reason: count($delivered).' item(s) delivered, '.count($undelivered).' not delivered',
         );
+
+        // Whole lines are undelivered: every unit of each line
+        return $sellerOrder->items
+            ->whereIn('id', $undelivered)
+            ->mapWithKeys(fn ($item) => [(int) $item->id => ['units' => (int) $item->qty, 'line_qty' => (int) $item->qty]])
+            ->all();
+    }
+
+    public function recordReshipDelivered(string $sellerOrderId, int $codCollectedPaise, bool $allItemsDelivered): void
+    {
+        DB::transaction(function () use ($sellerOrderId, $codCollectedPaise, $allItemsDelivered) {
+            /** @var SellerOrder $sellerOrder */
+            $sellerOrder = SellerOrder::lockForUpdate()->findOrFail($sellerOrderId);
+
+            if ($codCollectedPaise > 0 && $sellerOrder->expected_cod_amount_paise !== null) {
+                $sellerOrder->update(['expected_cod_amount_paise' => $sellerOrder->expected_cod_amount_paise + $codCollectedPaise]);
+            }
+
+            if ($allItemsDelivered && $sellerOrder->status === SellerOrderStatus::PartiallyDelivered) {
+                $this->orderService->transitionSellerOrderStatus(
+                    sellerOrder: $sellerOrder,
+                    newStatus: SellerOrderStatus::Delivered,
+                    actorType: 'returns_service',
+                    actorId: 0,
+                    reason: 'Remaining items delivered by reship',
+                );
+            }
+        });
     }
 
     public function markPartialDelivered(

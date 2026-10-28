@@ -22,6 +22,27 @@ interface CustomerRefundServiceInterface
     public function refundedUnits(int $orderItemId): int;
 
     /**
+     * Was the customer charged for units that were never delivered? (COD: no — only delivered items were collected.)
+     */
+    public function customerChargedForUndeliveredUnits(string $sellerOrderId): bool;
+
+    /**
+     * What the customer still owes for these undelivered units, after their coupon allocation (COD to collect on a
+     * reship); 0 when nothing is owed.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function amountOwedForUnits(string $sellerOrderId, array $units): int;
+
+    /**
+     * What these units are worth to the customer after their coupon allocation (whether or not it is owed), e.g. the
+     * value declared to the courier for a reship.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function unitsValue(string $sellerOrderId, array $units): int;
+
+    /**
      * Customer sets where the refund goes (UPI or bank). Validated; stored encrypted. A failed refund goes
      * back to pending for retry.
      *
@@ -30,7 +51,7 @@ interface CustomerRefundServiceInterface
     public function updatePayoutDetails(string $refundId, int $userId, array $details): CustomerRefundDto;
 
     /**
-     * Admin records a manual payout with its UTR. Customer and refund managers are notified.
+     * Admin records a manual payout with its UTR. The customer is notified.
      */
     public function markPaid(string $refundId, string $utr, int $adminId): CustomerRefundDto;
 

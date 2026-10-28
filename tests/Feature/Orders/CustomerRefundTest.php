@@ -164,8 +164,11 @@ test('one refund per source and never more units than the line has', function ()
 test('units the customer never paid for are recorded as not collected', function () {
     $refund = ($this->refund)('UND-1', 1, paid: false);
 
+    // Nothing is owed in cash; the units' value is still recorded per item and the coupon share released
     expect($refund->status)->toBe(RefundStatus::NotCollected)
-        ->and($refund->amountPaise)->toBe(9667);
+        ->and($refund->amountPaise)->toBe(0)
+        ->and((int) DB::table('customer_refund_items')->value('amount_paise'))->toBe(9667)
+        ->and($this->redemption->fresh()->released_amount)->toBe(333);
 });
 
 test('payout details are validated, encrypted at rest and never serialized', function () {
@@ -200,7 +203,7 @@ test('payout details are validated, encrypted at rest and never serialized', fun
         ->and($model->payoutDestination(full: true))->toContain('123456789012');
 });
 
-test('paid and failed refunds notify the customer and refund managers; a failed refund retries after new details', function () {
+test('customers hear about paid and failed refunds, refund managers only about failures; a failed refund retries after new details', function () {
     Mail::fake();
     Artisan::call('permissions:sync');
 
@@ -233,7 +236,10 @@ test('paid and failed refunds notify the customer and refund managers; a failed 
     expect($paid->status)->toBe(RefundStatus::Paid)
         ->and(CustomerRefund::find($refund->id)->utr)->toBe('UTR987654321');
 
-    Mail::assertQueued(RefundStatusMail::class, 4);
+    // Paid: customer only. Failed: customer and refund managers.
+    Mail::assertQueued(RefundStatusMail::class, 3);
+    Mail::assertQueued(RefundStatusMail::class, fn ($mail) => $mail->hasTo($this->customer->email) && $mail->refund->status === RefundStatus::Paid);
+    Mail::assertNotQueued(RefundStatusMail::class, fn ($mail) => $mail->hasTo($manager->email) && $mail->refund->status === RefundStatus::Paid);
 
     expect(fn () => $this->refunds->updatePayoutDetails($refund->id, $this->customer->id, ['payout_method' => 'upi', 'upi_id' => 'x.y@okicici']))
         ->toThrow(DomainException::class, 'only be changed while the refund is pending or failed');

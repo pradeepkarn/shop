@@ -28,6 +28,15 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Reship Shipping Multiplier
+    |--------------------------------------------------------------------------
+    | Reship of undelivered items: the seller is charged the forward shipping originally allocated to
+    | those units times this multiplier, when the reship is created.
+    */
+    'reship_shipping_multiplier' => (float) env('RETURNS_RESHIP_SHIPPING_MULTIPLIER', 1.0),
+
+    /*
+    |--------------------------------------------------------------------------
     | Return Windows
     |--------------------------------------------------------------------------
     | Days after delivery a customer may request a return. Each vertical sets its own window

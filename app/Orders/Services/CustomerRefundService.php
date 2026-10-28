@@ -8,6 +8,7 @@ use App\Models\Admin;
 use App\Models\User;
 use App\Orders\Contracts\CustomerRefundServiceInterface;
 use App\Orders\DTOs\CustomerRefundDto;
+use App\Orders\Enums\PaymentMethod;
 use App\Orders\Enums\RefundStatus;
 use App\Orders\Models\CustomerRefund;
 use App\Orders\Models\CustomerRefundItem;
@@ -85,8 +86,8 @@ class CustomerRefundService implements CustomerRefundServiceInterface
                 'user_id' => (int) $sellerOrder->order->user_id,
                 'source_type' => $sourceType,
                 'source_id' => $sourceId,
-                'amount_paise' => $total,
-                // Nothing to pay back when the customer was never charged (or the units cost nothing after coupon)
+                // Cash owed back: nothing when the customer was never charged (the per-unit value stays on the items)
+                'amount_paise' => $customerPaid ? $total : 0,
                 'status' => $customerPaid && $total > 0 ? RefundStatus::Pending : RefundStatus::NotCollected,
             ]);
 
@@ -110,6 +111,46 @@ class CustomerRefundService implements CustomerRefundServiceInterface
     public function refundedUnits(int $orderItemId): int
     {
         return (int) CustomerRefundItem::where('order_item_id', $orderItemId)->sum('units');
+    }
+
+    public function customerChargedForUndeliveredUnits(string $sellerOrderId): bool
+    {
+        /** @var SellerOrder $sellerOrder */
+        $sellerOrder = SellerOrder::with('order')->findOrFail($sellerOrderId);
+
+        // Exhaustive on purpose: a prepaid method must decide this explicitly
+        return match ($sellerOrder->order->payment_method) {
+            PaymentMethod::CashOnDelivery => false,
+        };
+    }
+
+    public function amountOwedForUnits(string $sellerOrderId, array $units): int
+    {
+        return $this->customerChargedForUndeliveredUnits($sellerOrderId) ? 0 : $this->unitsValue($sellerOrderId, $units);
+    }
+
+    public function unitsValue(string $sellerOrderId, array $units): int
+    {
+        $items = OrderItem::where('seller_order_id', $sellerOrderId)->whereIn('id', array_keys($units))->get()->keyBy('id');
+
+        $value = 0;
+        foreach ($units as $orderItemId => $unitCount) {
+            /** @var OrderItem|null $item */
+            $item = $items->get($orderItemId);
+            if (! $item) {
+                throw new DomainException("Order item {$orderItemId} does not belong to this order.");
+            }
+
+            $value += UnitRefundCalculator::calculate(
+                unitPricePaise: (int) $item->unit_price,
+                lineQty: (int) $item->qty,
+                lineCouponPaise: (int) $item->coupon_discount_amount,
+                unitsPrior: $this->refundedUnits((int) $item->id),
+                units: (int) $unitCount,
+            )->amountPaise;
+        }
+
+        return $value;
     }
 
     public function updatePayoutDetails(string $refundId, int $userId, array $details): CustomerRefundDto
@@ -266,7 +307,8 @@ class CustomerRefundService implements CustomerRefundServiceInterface
     }
 
     /**
-     * Customer and refund managers hear about paid/failed refunds. Only masked payout details go out.
+     * The customer hears about paid and failed refunds; refund managers only about failures (something to act on).
+     * Only masked payout details go out.
      */
     protected function notify(CustomerRefund $refund): void
     {
@@ -275,6 +317,10 @@ class CustomerRefundService implements CustomerRefundServiceInterface
         $customer = User::find($refund->user_id);
         if ($customer?->email) {
             Mail::to($customer->email)->queue(new RefundStatusMail($refund));
+        }
+
+        if ($refund->status !== RefundStatus::Failed) {
+            return;
         }
 
         try {
