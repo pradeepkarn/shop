@@ -2,6 +2,8 @@
 
 namespace App\Shipping\DTOs;
 
+use App\Shipping\Enums\ShipmentDirection;
+use App\Shipping\Enums\ShipmentPurpose;
 use App\Shipping\Enums\ShipmentStatus;
 use DateTimeInterface;
 
@@ -10,6 +12,7 @@ final readonly class ShipmentSummaryDto
     /**
      * @param  array<string, mixed>|null  $partialDeliveryData
      * @param  list<ShipmentEventDto>  $events
+     * @param  array<int, int>  $items  order item id => units carried; empty = whole seller order
      */
     public function __construct(
         public string $id,
@@ -42,5 +45,14 @@ final readonly class ShipmentSummaryDto
         public ?string $ndrAction = null,
         public ?array $partialDeliveryData = null,
         public array $events = [],
+        public ShipmentDirection $direction = ShipmentDirection::Forward,
+        public ShipmentPurpose $purpose = ShipmentPurpose::Original,
+        public ?string $parentShipmentId = null,
+        public array $items = [],
     ) {}
+
+    public function statusLabel(): string
+    {
+        return $this->status->labelFor($this->direction);
+    }
 }

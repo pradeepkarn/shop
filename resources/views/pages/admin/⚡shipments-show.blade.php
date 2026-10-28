@@ -54,7 +54,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     #[Computed]
     public function shipment(): ?Shipment
     {
-        return Shipment::with('events')->find($this->shipmentId);
+        return Shipment::with(['events', 'items'])->find($this->shipmentId);
     }
 
     #[Computed]
@@ -238,7 +238,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
 
         try {
-            if ($shipmentModel->status !== ShipmentStatus::Lost) {
+            if ($shipmentModel->isReverse() || $shipmentModel->status !== ShipmentStatus::Lost) {
                 throw new \DomainException('Only a shipment the courier reported as Lost can be confirmed lost.');
             }
 
@@ -349,7 +349,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             </p>
 
             <div class="flex flex-wrap gap-2 pt-1">
-                @forelse ($shipmentModel->status->nextForwardStatuses() as $nextStatus)
+                @forelse ($shipmentModel->nextCourierStatuses() as $nextStatus)
                     <button
                         type="button"
                         wire:click="simulateTransition('{{ $nextStatus->value }}')"
@@ -357,11 +357,11 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                         data-test="simulate-{{ $nextStatus->value }}"
                         class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 shadow-2xs hover:bg-amber-100 hover:border-amber-400 dark:border-amber-800 dark:bg-zinc-900 dark:text-amber-200 dark:hover:bg-amber-950/60 transition"
                     >
-                        &rarr; {{ $nextStatus->label() }}
+                        &rarr; {{ $nextStatus->labelFor($shipmentModel->direction) }}
                     </button>
                 @empty
                     <span data-test="simulate-none" class="text-xs text-amber-800 dark:text-amber-300">
-                        {{ $shipmentModel->status->label() }} is final; no further courier steps to simulate.
+                        {{ $shipmentModel->statusLabel() }} is final; no further courier steps to simulate.
                     </span>
                 @endforelse
             </div>
@@ -377,12 +377,16 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             </h1>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                 Created on @datetime($shipmentModel->created_at) &bull; Provider: <strong class="uppercase text-zinc-700 dark:text-zinc-300">{{ $shipmentModel->provider }}</strong>
+                    &bull; <span data-test="shipment-direction" class="font-semibold text-zinc-700 dark:text-zinc-300">{{ $shipmentModel->direction->label() }} ({{ $shipmentModel->purpose->label() }})</span>
+                    @if ($shipmentModel->parent_shipment_id)
+                        &bull; <a href="{{ route('admin.shipments.show', ['shipment' => $shipmentModel->parent_shipment_id]) }}" wire:navigate class="underline">Parent shipment</a>
+                    @endif
             </p>
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
             <span class="inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-bold {{ $shipmentModel->status->badgeClasses() }}" data-test="shipment-status-badge">
-                Status: {{ $shipmentModel->status->label() }}
+                Status: {{ $shipmentModel->statusLabel() }}
             </span>
 
             @if ($shipmentModel->label_path)
@@ -430,7 +434,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     </div>
 
     {{-- NDR / Delivery Failed Action Card --}}
-    @if ($shipmentModel->ndr_attempt_count > 0 || $shipmentModel->status === ShipmentStatus::DeliveryFailed)
+    @if (! $shipmentModel->isReverse() && ($shipmentModel->ndr_attempt_count > 0 || $shipmentModel->status === ShipmentStatus::DeliveryFailed))
         <div data-test="ndr-management-card" class="rounded-2xl border border-amber-200 bg-amber-50/70 p-6 shadow-xs dark:border-amber-900/50 dark:bg-amber-950/30 space-y-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -496,7 +500,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     @endif
 
     {{-- Lost Shipment Card --}}
-    @if ($shipmentModel->status === ShipmentStatus::Lost)
+    @if (! $shipmentModel->isReverse() && $shipmentModel->status === ShipmentStatus::Lost)
         <div data-test="lost-shipment-card" class="rounded-2xl border border-red-200 bg-red-50/70 p-6 shadow-xs dark:border-red-900/50 dark:bg-red-950/30 space-y-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -524,7 +528,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     @endif
 
     {{-- Partial Delivery Item Review Card --}}
-    @if ($shipmentModel->status === ShipmentStatus::PartialDelivered && $orderModel && empty($shipmentModel->partial_delivery_data['resolved_at']))
+    @if (! $shipmentModel->isReverse() && $shipmentModel->status === ShipmentStatus::PartialDelivered && $orderModel && empty($shipmentModel->partial_delivery_data['resolved_at']))
         <div data-test="partial-delivery-card" class="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-6 shadow-xs dark:border-indigo-900/50 dark:bg-indigo-950/30 space-y-4">
             <div>
                 <h3 class="text-sm font-bold text-indigo-900 dark:text-indigo-200">
@@ -570,7 +574,7 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
     @endif
 
     {{-- RTO Review & Admin Decision Card --}}
-    @if ($canViewReturns && ($shipmentModel->status === ShipmentStatus::RtoDelivered || $rtoReport))
+    @if ($canViewReturns && ! $shipmentModel->isReverse() && ($shipmentModel->status === ShipmentStatus::RtoDelivered || $rtoReport))
         <div data-test="rto-review-card" class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
             <div class="flex items-center justify-between border-b border-zinc-100 pb-3 dark:border-zinc-800">
                 <div>
@@ -662,6 +666,21 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
                     </div>
                 @endif
             @endcan
+        </div>
+    @endif
+
+    @if ($shipmentModel->items->isNotEmpty() && $orderModel)
+        <div data-test="shipment-items-card" class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-2">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-3 dark:border-zinc-800">
+                Items in this shipment
+            </h3>
+            @foreach ($shipmentModel->items as $shipmentItem)
+                @php $orderItem = $orderModel->items->firstWhere('id', $shipmentItem->order_item_id); @endphp
+                <div class="flex justify-between text-xs">
+                    <span class="text-zinc-900 dark:text-white">{{ $orderItem?->title ?? 'Item #'.$shipmentItem->order_item_id }}</span>
+                    <span class="font-mono text-zinc-500">&times; {{ $shipmentItem->qty }}</span>
+                </div>
+            @endforeach
         </div>
     @endif
 

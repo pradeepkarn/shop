@@ -17,6 +17,55 @@ enum ShipmentStatus: string
     case Lost = 'lost';
     case Exception = 'exception';
     case PartialDelivered = 'partial_delivered';
+    case PickupFailed = 'pickup_failed';
+
+    /**
+     * Status wording for the shipment's direction: on a return pickup "Delivered" means
+     * the package reached the seller.
+     */
+    public function labelFor(ShipmentDirection $direction): string
+    {
+        if ($direction === ShipmentDirection::Reverse) {
+            return match ($this) {
+                self::PickedUp => 'Picked Up from Customer',
+                self::Delivered => 'Returned to Seller',
+                self::Cancelled => 'Return Pickup Cancelled',
+                default => $this->label(),
+            };
+        }
+
+        return $this->label();
+    }
+
+    /**
+     * Next statuses for the shipment's direction (courier lifecycle), used to offer and enforce simulation steps.
+     *
+     * @return list<self>
+     */
+    public function nextStatusesFor(ShipmentDirection $direction): array
+    {
+        return $direction === ShipmentDirection::Reverse
+            ? $this->nextReverseStatuses()
+            : $this->nextForwardStatuses();
+    }
+
+    /**
+     * Return pickup lifecycle: pickup (with failed attempts and re-attempts) -> transit -> received by seller.
+     * After failed attempts the courier cancels the pickup. Terminal: Delivered, Cancelled, Lost.
+     *
+     * @return list<self>
+     */
+    public function nextReverseStatuses(): array
+    {
+        return match ($this) {
+            self::Created => [self::PickupScheduled, self::PickedUp, self::PickupFailed],
+            self::PickupScheduled => [self::PickedUp, self::PickupFailed],
+            self::PickupFailed => [self::PickupScheduled, self::PickedUp, self::Cancelled],
+            self::PickedUp => [self::InTransit, self::Lost],
+            self::InTransit => [self::Delivered, self::Lost],
+            default => [],
+        };
+    }
 
     public function label(): string
     {
@@ -34,6 +83,7 @@ enum ShipmentStatus: string
             self::Lost => 'Lost',
             self::Exception => 'Exception',
             self::PartialDelivered => 'Partially Delivered',
+            self::PickupFailed => 'Pickup Failed',
         };
     }
 
@@ -54,6 +104,8 @@ enum ShipmentStatus: string
             self::RtoInitiated => [self::RtoDelivered, self::Lost],
             self::Exception => [self::InTransit, self::RtoInitiated, self::Lost],
             self::Delivered, self::PartialDelivered, self::RtoDelivered, self::Cancelled, self::Lost => [],
+            // Pickup Failed only happens on return pickups
+            self::PickupFailed => [],
         };
     }
 
@@ -73,7 +125,7 @@ enum ShipmentStatus: string
         return match ($this) {
             self::Delivered => 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/20',
             self::RtoDelivered => 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20 dark:bg-rose-500/10 dark:text-rose-400 dark:ring-rose-500/20',
-            self::RtoInitiated, self::DeliveryFailed => 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-400 dark:ring-amber-500/20',
+            self::RtoInitiated, self::DeliveryFailed, self::PickupFailed => 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-400 dark:ring-amber-500/20',
             self::Cancelled, self::Lost => 'bg-zinc-100 text-zinc-600 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700',
             self::Exception => 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20',
             self::PartialDelivered => 'bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-600/20 dark:bg-purple-500/10 dark:text-purple-400 dark:ring-purple-500/20',

@@ -11,11 +11,17 @@ use App\Shipping\Drivers\FakeCarrierDriver;
 use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use App\Shipping\DTOs\CreateShipmentRequestDto;
 use App\Shipping\DTOs\TrackingStatusDto;
+use App\Shipping\Enums\ShipmentDirection;
 use App\Shipping\Enums\ShipmentEventType;
+use App\Shipping\Enums\ShipmentPurpose;
 use App\Shipping\Enums\ShipmentStatus;
 use App\Shipping\Events\ShipmentDeliveryFailed;
 use App\Shipping\Events\ShipmentLost;
 use App\Shipping\Events\ShipmentPartialDelivered;
+use App\Shipping\Events\ShipmentReturnLost;
+use App\Shipping\Events\ShipmentReturnPickupCancelled;
+use App\Shipping\Events\ShipmentReturnPickupFailed;
+use App\Shipping\Events\ShipmentReturnReceived;
 use App\Shipping\Events\ShipmentRtoDelivered;
 use App\Shipping\Events\ShipmentRtoInitiated;
 use App\Shipping\Models\SellerShippingProfile;
@@ -49,6 +55,8 @@ class ShipmentService implements ShipmentServiceInterface
         // Idempotency: check if active non-cancelled shipment already exists
         /** @var Shipment|null $existing */
         $existing = Shipment::where('seller_order_id', $sellerOrderId)
+            ->where('direction', ShipmentDirection::Forward->value)
+            ->where('purpose', ShipmentPurpose::Original->value)
             ->where('status', '!=', ShipmentStatus::Cancelled->value)
             ->first();
 
@@ -84,7 +92,10 @@ class ShipmentService implements ShipmentServiceInterface
             pickupLocationAlias: 'WH-'.$details->sellerProfileId,
         );
 
-        $previousAttempts = Shipment::where('seller_order_id', $sellerOrderId)->count();
+        $previousAttempts = Shipment::where('seller_order_id', $sellerOrderId)
+            ->where('direction', ShipmentDirection::Forward->value)
+            ->where('purpose', ShipmentPurpose::Original->value)
+            ->count();
         $attempt = $existing ? ($existing->fulfillment_attempt ?: 1) : ($previousAttempts + 1);
 
         $targetShipment = $existing;
@@ -340,6 +351,13 @@ class ShipmentService implements ShipmentServiceInterface
                 $updates['picked_up_at'] = $trackingDto->pickedUpAt;
             }
 
+            // Return pickups never touch order status; they only report progress of the return
+            if ($shipment->isReverse()) {
+                $this->applyReverseCourierEvent($shipment, $trackingDto, $updates);
+
+                return $event;
+            }
+
             if ($trackingDto->status === ShipmentStatus::Delivered && ! $shipment->delivered_at) {
                 $deliveredAt = $trackingDto->occurredAt ? Carbon::instance($trackingDto->occurredAt) : now();
                 $updates['delivered_at'] = $deliveredAt;
@@ -407,12 +425,54 @@ class ShipmentService implements ShipmentServiceInterface
         });
     }
 
+    /**
+     * @param  array<string, mixed>  $updates
+     */
+    protected function applyReverseCourierEvent(Shipment $shipment, TrackingStatusDto $trackingDto, array $updates): void
+    {
+        $status = $trackingDto->status;
+
+        if ($status === ShipmentStatus::Delivered && ! $shipment->delivered_at) {
+            $updates['delivered_at'] = $trackingDto->occurredAt ? Carbon::instance($trackingDto->occurredAt) : now();
+        }
+
+        // Pickup attempts reuse the NDR attempt counters (same meaning: a failed courier attempt)
+        if ($status === ShipmentStatus::PickupFailed) {
+            $updates['ndr_attempt_count'] = ($shipment->ndr_attempt_count ?? 0) + 1;
+            $updates['latest_ndr_reason'] = $trackingDto->description ?? $trackingDto->providerNdrStatus ?? 'Pickup attempt failed';
+        }
+
+        if ($status === ShipmentStatus::Cancelled && ! $shipment->cancelled_at) {
+            $updates['cancelled_at'] = now();
+        }
+
+        $shipment->update($updates);
+
+        DB::afterCommit(function () use ($shipment, $trackingDto, $updates, $status) {
+            $shipmentId = (string) $shipment->id;
+            $sellerOrderId = (string) $shipment->seller_order_id;
+
+            match ($status) {
+                ShipmentStatus::Delivered => event(new ShipmentReturnReceived($shipmentId, $sellerOrderId, $trackingDto->description)),
+                ShipmentStatus::PickupFailed => event(new ShipmentReturnPickupFailed(
+                    shipmentId: $shipmentId,
+                    sellerOrderId: $sellerOrderId,
+                    attemptCount: (int) $updates['ndr_attempt_count'],
+                    reason: $updates['latest_ndr_reason'],
+                )),
+                ShipmentStatus::Cancelled => event(new ShipmentReturnPickupCancelled($shipmentId, $sellerOrderId, $trackingDto->description)),
+                ShipmentStatus::Lost => event(new ShipmentReturnLost($shipmentId, $sellerOrderId, $trackingDto->description)),
+                default => null,
+            };
+        });
+    }
+
     public function actionNdr(string $shipmentId, string $action, array $payload = []): array
     {
         /** @var Shipment $shipment */
         $shipment = Shipment::findOrFail($shipmentId);
 
-        if ($shipment->status !== ShipmentStatus::DeliveryFailed) {
+        if ($shipment->isReverse() || $shipment->status !== ShipmentStatus::DeliveryFailed) {
             throw new DomainException('NDR actions can only be taken on shipments in Delivery Failed (NDR) status.');
         }
 
@@ -498,8 +558,8 @@ class ShipmentService implements ShipmentServiceInterface
             throw new DomainException('Simulation is only allowed for shipments using the fake carrier.');
         }
 
-        if (! in_array($status, $shipment->status->nextForwardStatuses(), true)) {
-            throw new DomainException("Cannot simulate {$status->label()} from {$shipment->status->label()}.");
+        if (! in_array($status, $shipment->nextCourierStatuses(), true)) {
+            throw new DomainException("Cannot simulate {$status->labelFor($shipment->direction)} from {$shipment->statusLabel()}.");
         }
 
         $driver = $this->carrierManager->driver('fake');
