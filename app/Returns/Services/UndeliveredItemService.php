@@ -37,7 +37,7 @@ class UndeliveredItemService implements UndeliveredItemServiceInterface
                 sourceId: $item->id,
                 sellerOrderId: $item->seller_order_id,
                 units: [$item->order_item_id => $item->units],
-                customerPaid: $this->refunds->customerChargedForUndeliveredUnits($item->seller_order_id),
+                customerPaid: $this->customerPaid($item),
             );
 
             $item->update([
@@ -54,17 +54,19 @@ class UndeliveredItemService implements UndeliveredItemServiceInterface
 
     public function reship(string $undeliveredItemId, int $adminId): UndeliveredItem
     {
-        return DB::transaction(function () use ($undeliveredItemId, $adminId) {
+        // 1. Database work only: reserve stock, create the pending reship, charge reship shipping, update the item
+        $item = DB::transaction(function () use ($undeliveredItemId, $adminId) {
             $item = $this->lockPending($undeliveredItemId);
             $units = [$item->order_item_id => $item->units];
 
             // Throws (and rolls everything back) when out of stock or the listing is not active: refund instead
             $this->inventory->reserveStockForReship($item->order_item_id, $item->units);
 
-            $shipment = $this->shipments->createReshipShipment(
+            $shipment = $this->shipments->createReshipBooking(
                 sellerOrderId: $item->seller_order_id,
                 units: $units,
-                codAmountPaise: $this->refunds->amountOwedForUnits($item->seller_order_id, $units),
+                // A customer who already paid for these units (missing-item claim) owes nothing on the reship
+                codAmountPaise: $item->customer_paid ? 0 : $this->refunds->amountOwedForUnits($item->seller_order_id, $units),
                 declaredValuePaise: $this->refunds->unitsValue($item->seller_order_id, $units),
             );
 
@@ -81,6 +83,17 @@ class UndeliveredItemService implements UndeliveredItemServiceInterface
 
             return $item->fresh();
         });
+
+        // 2. Courier booking after commit, with no locks held. A failure leaves a retryable booking_failed reship;
+        // stock and the shipping charge are not applied again on retry.
+        $this->shipments->bookShipment((string) $item->reship_shipment_id);
+
+        return $item->fresh();
+    }
+
+    protected function customerPaid(UndeliveredItem $item): bool
+    {
+        return $item->customer_paid || $this->refunds->customerChargedForUndeliveredUnits($item->seller_order_id);
     }
 
     public function reshipDelivered(string $reshipShipmentId, string $deliveredAt): void

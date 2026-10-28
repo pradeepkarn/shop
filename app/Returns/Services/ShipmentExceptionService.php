@@ -107,7 +107,7 @@ class ShipmentExceptionService implements ShipmentExceptionServiceInterface
                 sourceId: $item->id,
                 sellerOrderId: $item->seller_order_id,
                 units: [$item->order_item_id => $item->units],
-                customerPaid: $this->refunds->customerChargedForUndeliveredUnits($item->seller_order_id),
+                customerPaid: $item->customer_paid || $this->refunds->customerChargedForUndeliveredUnits($item->seller_order_id),
             );
 
             $item->update(['status' => UndeliveredItem::STATUS_LOST, 'refund_id' => $refund->id]);

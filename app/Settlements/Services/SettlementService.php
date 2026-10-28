@@ -347,6 +347,61 @@ class SettlementService implements SettlementServiceInterface
         });
     }
 
+    public function placeReturnHold(string $sellerOrderId): void
+    {
+        SellerOrderSettlement::forSellerOrder($sellerOrderId)->update(['is_return_hold' => true]);
+    }
+
+    public function releaseReturnHold(string $sellerOrderId): void
+    {
+        SellerOrderSettlement::forSellerOrder($sellerOrderId)->update(['is_return_hold' => false]);
+    }
+
+    public function savedReturnWindowDays(string $sellerOrderId): ?int
+    {
+        /** @var SellerOrderSettlement|null $settlement */
+        $settlement = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+
+        // Pending/void settlements were never put on hold at delivery, so no window was saved
+        if (! $settlement || in_array($settlement->status, [SettlementStatus::Pending, SettlementStatus::Void], true)) {
+            return null;
+        }
+
+        return $settlement->return_window_days;
+    }
+
+    public function reverseUnitsForReturnClaim(string $sellerOrderId, string $returnRequestId, array $lines): int
+    {
+        return DB::transaction(function () use ($sellerOrderId, $returnRequestId, $lines) {
+            /** @var SellerOrderSettlement|null $order */
+            $order = SellerOrderSettlement::forSellerOrder($sellerOrderId)->first();
+            if (! $order) {
+                throw new DomainException("Seller order {$sellerOrderId} has no settlement to reverse against.");
+            }
+
+            /** @var SellerOrderSettlement $claim */
+            $claim = SellerOrderSettlement::firstOrCreate(
+                ['seller_order_id' => $sellerOrderId, 'kind' => SellerOrderSettlement::KIND_RETURN, 'reference_id' => $returnRequestId],
+                [
+                    'order_id' => $order->order_id,
+                    'seller_profile_id' => $order->seller_profile_id,
+                    'status' => SettlementStatus::Eligible,
+                    'gross_amount' => 0,
+                    'total_deductions' => 0,
+                    'net_payout' => 0,
+                    'claimable_credits' => 0,
+                    'return_window_days' => $order->return_window_days,
+                ]
+            );
+
+            $debit = $this->ledgerService->recordUnitReversals($claim, $lines, "return:{$returnRequestId}");
+
+            $claim->update(['total_deductions' => $debit, 'net_payout' => -$debit]);
+
+            return $debit;
+        });
+    }
+
     public function releaseMaturedSettlements(): int
     {
         // hold_until is stored in app time (UTC); an IST-zoned "now" would be bound as IST wall-clock
@@ -355,6 +410,7 @@ class SettlementService implements SettlementServiceInterface
 
         $matured = SellerOrderSettlement::where('status', SettlementStatus::OnHold)
             ->where('is_partial_delivery_hold', false)
+            ->where('is_return_hold', false)
             ->where('hold_until', '<=', $now)
             ->get();
 

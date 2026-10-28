@@ -69,6 +69,31 @@ interface SettlementServiceInterface
     public function cancelReshipSettlement(string $reshipShipmentId): ?SellerOrderSettlement;
 
     /**
+     * An open customer return blocks release (and payout) of the package's settlement.
+     */
+    public function placeReturnHold(string $sellerOrderId): void;
+
+    /**
+     * The return was closed, rejected or resolved: the package's settlement follows its normal hold again.
+     */
+    public function releaseReturnHold(string $sellerOrderId): void;
+
+    /**
+     * The return window saved when the package was delivered, or null if it has not been delivered (or has no
+     * settlement). Later edits to a vertical never change it.
+     */
+    public function savedReturnWindowDays(string $sellerOrderId): ?int;
+
+    /**
+     * Missing-item claim approved: reverse sale and fees for those units in a separate return settlement (kind return,
+     * keyed by the return request), eligible and negative so it is carried into the seller's next payout.
+     * Forward shipping stays charged. Returns the amount debited.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines
+     */
+    public function reverseUnitsForReturnClaim(string $sellerOrderId, string $returnRequestId, array $lines): int;
+
+    /**
      * Release all matured on_hold settlements whose return window has passed.
      */
     public function releaseMaturedSettlements(): int;

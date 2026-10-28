@@ -113,6 +113,13 @@ class CustomerRefundService implements CustomerRefundServiceInterface
         return (int) CustomerRefundItem::where('order_item_id', $orderItemId)->sum('units');
     }
 
+    public function hasOpenRefunds(int $userId): bool
+    {
+        return CustomerRefund::where('user_id', $userId)
+            ->whereIn('status', [RefundStatus::Pending->value, RefundStatus::Failed->value])
+            ->exists();
+    }
+
     public function customerChargedForUndeliveredUnits(string $sellerOrderId): bool
     {
         /** @var SellerOrder $sellerOrder */

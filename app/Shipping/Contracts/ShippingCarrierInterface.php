@@ -46,6 +46,19 @@ interface ShippingCarrierInterface
     ): CreateShipmentResponseDto;
 
     /**
+     * Book a return pickup: the courier collects $details' items from the customer (the order's delivery address)
+     * and delivers them to the seller's pickup address. Nothing is collected from the customer.
+     * $shipment lets step-based carriers persist progress so a retry resumes instead of re-creating.
+     */
+    public function createReverseShipment(
+        CreateShipmentRequestDto $request,
+        SellerOrderShippingDetailsDto $details,
+        SellerOrderInvoiceDto $invoice,
+        string $returnReason,
+        ?Shipment $shipment = null,
+    ): CreateShipmentResponseDto;
+
+    /**
      * Download packing label binary PDF data for an AWB.
      */
     public function downloadLabel(string $awb): string;

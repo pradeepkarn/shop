@@ -24,6 +24,9 @@ use Illuminate\Database\Eloquent\Model;
  * @property Carbon|null $resolved_at
  * @property int|null $resolved_by_admin_id
  * @property int|null $recorded_by_admin_id
+ * @property string $origin
+ * @property bool $customer_paid
+ * @property string|null $return_request_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
@@ -40,6 +43,10 @@ class UndeliveredItem extends Model
     public const STATUS_RESHIPPED = 'reshipped';
 
     public const STATUS_LOST = 'lost';
+
+    public const ORIGIN_PARTIAL_DELIVERY = 'partial_delivery';
+
+    public const ORIGIN_MISSING_ITEM_CLAIM = 'missing_item_claim';
 
     public const RESOLUTION_REFUND = 'refund';
 
@@ -65,6 +72,9 @@ class UndeliveredItem extends Model
         'resolved_at',
         'resolved_by_admin_id',
         'recorded_by_admin_id',
+        'origin',
+        'customer_paid',
+        'return_request_id',
     ];
 
     /**
@@ -80,6 +90,7 @@ class UndeliveredItem extends Model
             'resolved_at' => 'datetime',
             'resolved_by_admin_id' => 'integer',
             'recorded_by_admin_id' => 'integer',
+            'customer_paid' => 'boolean',
         ];
     }
 

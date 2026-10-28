@@ -27,6 +27,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $provider_shipment_id
  * @property int $fulfillment_attempt
  * @property string $creation_step
+ * @property string $booking_status
+ * @property string|null $booking_error
+ * @property string|null $return_reason
  * @property string|null $public_tracking_url
  * @property ShipmentStatus $status
  * @property int $ndr_attempt_count
@@ -72,7 +75,16 @@ class Shipment extends Model
     protected $attributes = [
         'direction' => 'forward',
         'purpose' => 'original',
+        'booking_status' => self::BOOKING_BOOKED,
     ];
+
+    public const BOOKING_PENDING = 'pending';
+
+    public const BOOKING_IN_PROGRESS = 'in_progress';
+
+    public const BOOKING_BOOKED = 'booked';
+
+    public const BOOKING_FAILED = 'failed';
 
     protected $fillable = [
         'id',
@@ -90,6 +102,9 @@ class Shipment extends Model
         'provider_shipment_id',
         'fulfillment_attempt',
         'creation_step',
+        'booking_status',
+        'booking_error',
+        'return_reason',
         'public_tracking_url',
         'status',
         'ndr_attempt_count',
@@ -176,6 +191,11 @@ class Shipment extends Model
     public function items(): HasMany
     {
         return $this->hasMany(ShipmentItem::class, 'shipment_id');
+    }
+
+    public function isBooked(): bool
+    {
+        return $this->booking_status === self::BOOKING_BOOKED;
     }
 
     public function isReverse(): bool

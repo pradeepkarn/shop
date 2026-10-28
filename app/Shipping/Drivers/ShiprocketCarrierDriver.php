@@ -381,6 +381,131 @@ class ShiprocketCarrierDriver implements ShippingCarrierInterface
         }
     }
 
+    /**
+     * Return pickup, per the Postman collection folder "Return & Exchange Orders":
+     *  1. "Create a Return Order"            POST /orders/create/return  (pickup_* = customer, shipping_* = seller)
+     *  2. "Generate AWB for Return Shipment" POST /courier/assign/awb      (shipment_id, is_return: 1)
+     * Progress is saved on $shipment (creation_step), so a retry resumes and never creates a second return order.
+     */
+    public function createReverseShipment(
+        CreateShipmentRequestDto $request,
+        SellerOrderShippingDetailsDto $details,
+        SellerOrderInvoiceDto $invoice,
+        string $returnReason,
+        ?Shipment $shipment = null,
+    ): CreateShipmentResponseDto {
+        if ($this->safeMode) {
+            throw new DomainException('Shipping safe mode is active. Live return pickup creation is blocked.');
+        }
+
+        $step = $shipment?->creation_step ?: 'pending';
+        $shiprocketShipmentId = $shipment?->provider_shipment_id;
+        $attempt = $shipment?->fulfillment_attempt ?: 1;
+
+        if ($step === 'pending' || empty($shiprocketShipmentId)) {
+            $customerPhone = substr((string) preg_replace('/\D/', '', $details->customerPhone), -10);
+            $sellerPhone = substr((string) preg_replace('/\D/', '', (string) $details->sellerPhone), -10);
+
+            $orderItems = [];
+            foreach ($details->items as $item) {
+                $orderItems[] = [
+                    'name' => substr($item->title, 0, 100),
+                    'sku' => substr((string) $item->sku, 0, 50),
+                    'units' => max(1, $item->quantity),
+                    'selling_price' => round($item->unitPricePaise / 100, 2),
+                    'discount' => 0,
+                    'return_reason' => substr($returnReason, 0, 100),
+                ];
+            }
+
+            $payload = [
+                'order_id' => str_replace('/', '-', $invoice->invoiceNumber)."-R{$attempt}",
+                'order_date' => now()->format('Y-m-d'),
+                'pickup_customer_name' => substr($details->customerName, 0, 100),
+                'pickup_last_name' => '',
+                'pickup_address' => substr($details->customerAddress1, 0, 100),
+                'pickup_address_2' => $details->customerAddress2 ? substr($details->customerAddress2, 0, 100) : '',
+                'pickup_city' => $details->customerCity,
+                'pickup_state' => $details->customerState,
+                'pickup_country' => 'India',
+                'pickup_pincode' => (int) preg_replace('/\D/', '', $details->customerPostalCode),
+                // Required by Shiprocket; the order details carry no customer email, so the platform contact is used
+                'pickup_email' => (string) config('shipping.shiprocket.return_contact_email', config('mail.from.address')),
+                'pickup_phone' => $customerPhone,
+                'pickup_isd_code' => '91',
+                'shipping_customer_name' => substr($details->sellerStoreName, 0, 100),
+                'shipping_last_name' => '',
+                'shipping_address' => substr((string) ($details->sellerPickupAddress1 ?: 'Registered Warehouse'), 0, 100),
+                'shipping_address_2' => $details->sellerPickupAddress2 ? substr($details->sellerPickupAddress2, 0, 100) : '',
+                'shipping_city' => (string) $details->sellerPickupCity,
+                'shipping_country' => 'India',
+                'shipping_pincode' => (int) preg_replace('/\D/', '', (string) $details->sellerPickupPostalCode),
+                'shipping_state' => (string) $details->sellerPickupState,
+                'shipping_isd_code' => '91',
+                'shipping_phone' => (int) ($sellerPhone ?: 0),
+                'order_items' => $orderItems,
+                'payment_method' => 'PREPAID',
+                'total_discount' => '0',
+                'sub_total' => max(1, round($details->grandTotalPaise / 100, 2)),
+                'length' => max(1, $request->lengthCm),
+                'breadth' => max(1, $request->widthCm),
+                'height' => max(1, $request->heightCm),
+                'weight' => self::gramsToKg(max(50, $request->actualWeightGrams)),
+            ];
+
+            $orderResp = $this->client()->post('/orders/create/return', $payload);
+            $shiprocketShipmentId = $orderResp->successful() ? ($orderResp->json('shipment_id') ?? null) : null;
+
+            if (! $shiprocketShipmentId) {
+                return new CreateShipmentResponseDto(
+                    success: false,
+                    awb: null,
+                    vendorWbn: null,
+                    publicTrackingUrl: null,
+                    errorMessage: 'Shiprocket return order creation failed: '.$orderResp->body(),
+                    rawResponse: $orderResp->json(),
+                );
+            }
+
+            $shipment?->update([
+                'provider_order_id' => (string) $orderResp->json('order_id'),
+                'provider_shipment_id' => (string) $shiprocketShipmentId,
+                'creation_step' => 'order_created',
+            ]);
+        }
+
+        $awbResp = $this->client()->post('/courier/assign/awb', [
+            'shipment_id' => (int) $shiprocketShipmentId,
+            'is_return' => 1,
+        ]);
+        $awbCode = $awbResp->successful() ? $awbResp->json('response.data.awb_code') : null;
+
+        if (! $awbCode) {
+            return new CreateShipmentResponseDto(
+                success: false,
+                awb: null,
+                vendorWbn: null,
+                publicTrackingUrl: null,
+                errorMessage: 'Shiprocket return AWB assignment failed: '.$awbResp->body(),
+                rawResponse: $awbResp->json(),
+            );
+        }
+
+        $shipment?->update(['creation_step' => 'awb_assigned']);
+
+        return new CreateShipmentResponseDto(
+            success: true,
+            awb: (string) $awbCode,
+            vendorWbn: null,
+            publicTrackingUrl: null,
+            estimatedChargesPaise: 0,
+            rawResponse: [
+                'courier_name' => $awbResp->json('response.data.courier_name'),
+                'shiprocket_shipment_id' => (string) $shiprocketShipmentId,
+            ],
+        );
+    }
+
     public function createShipment(
         CreateShipmentRequestDto $request,
         SellerOrderShippingDetailsDto $details,

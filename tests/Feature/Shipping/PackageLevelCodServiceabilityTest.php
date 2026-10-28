@@ -13,6 +13,7 @@ use App\Shipping\DTOs\SellerWarehouseRegistrationDto;
 use App\Shipping\DTOs\ServiceabilityResultDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentStatus;
+use App\Shipping\Models\Shipment;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 
@@ -192,6 +193,11 @@ test('carrier timeout at checkout does not block the order (fail open)', functio
         public function createShipment(CreateShipmentRequestDto $request, SellerOrderShippingDetailsDto $details, SellerOrderInvoiceDto $invoice): CreateShipmentResponseDto
         {
             return new CreateShipmentResponseDto(true, 'AWB-1');
+        }
+
+        public function createReverseShipment(CreateShipmentRequestDto $request, SellerOrderShippingDetailsDto $details, SellerOrderInvoiceDto $invoice, string $returnReason, ?Shipment $shipment = null): CreateShipmentResponseDto
+        {
+            return new CreateShipmentResponseDto(true, 'RVP-1');
         }
 
         public function downloadLabel(string $awb): string

@@ -28,6 +28,7 @@ use App\Settlements\Enums\LedgerEntryType;
 use App\Settlements\Enums\SettlementStatus;
 use App\Settlements\Models\SellerLedgerEntry;
 use App\Settlements\Models\SellerOrderSettlement;
+use App\Shipping\Contracts\CarrierManagerInterface;
 use App\Shipping\Enums\ShipmentDirection;
 use App\Shipping\Enums\ShipmentPurpose;
 use App\Shipping\Enums\ShipmentStatus;
@@ -362,3 +363,59 @@ test('staff without returns.manage cannot refund or reship undelivered items', f
 
     expect($this->item->fresh()->status)->toBe(UndeliveredItem::STATUS_PENDING);
 })->with(['refundUndeliveredItem', 'reshipUndeliveredItem']);
+
+test('a courier failure leaves a retryable booking_failed reship with stock and charge applied once; retry succeeds', function () {
+    $fake = app(CarrierManagerInterface::class)->driver('fake');
+    $fake->shouldFailCreation = true;
+
+    ($this->queue)()->call('reshipUndeliveredItem', $this->item->id)->assertSee('the courier booking failed');
+
+    $reship = ($this->reshipShipment)();
+    expect($reship->booking_status)->toBe(Shipment::BOOKING_FAILED)
+        ->and($reship->booking_error)->toContain('Simulated fake creation failure')
+        ->and($reship->awb)->toBeNull()
+        ->and($this->listing->fresh()->stock)->toBe(3)
+        ->and(($this->reshipSettlement)()->net_payout)->toBe(-1200)
+        ->and($this->item->fresh()->status)->toBe(UndeliveredItem::STATUS_RESHIPPING);
+
+    $ledgerCount = SellerLedgerEntry::count();
+    $page = fn () => $this->actingAs($this->admin, 'admin')->get(route('admin.shipments.show', ['shipment' => $reship->id]));
+    $page()->assertSee('data-test="retry-booking-btn"', false)->assertDontSee('data-test="fake-simulation-toolbar"', false);
+
+    // Still failing: nothing is reserved or charged again
+    ($this->shipmentPage)($reship->id)->call('retryBooking')->assertSee('Courier booking failed again');
+    expect($reship->fresh()->booking_status)->toBe(Shipment::BOOKING_FAILED)
+        ->and($this->listing->fresh()->stock)->toBe(3)
+        ->and(SellerLedgerEntry::count())->toBe($ledgerCount);
+
+    $fake->shouldFailCreation = false;
+    ($this->shipmentPage)($reship->id)->call('retryBooking')->assertSee('Courier booking succeeded');
+
+    $booked = $reship->fresh();
+    expect($booked->booking_status)->toBe(Shipment::BOOKING_BOOKED)
+        ->and($booked->awb)->not->toBeEmpty()
+        ->and(Shipment::where('purpose', ShipmentPurpose::Reship->value)->count())->toBe(1)
+        ->and($this->listing->fresh()->stock)->toBe(3)
+        ->and(SellerLedgerEntry::count())->toBe($ledgerCount)
+        ->and(($this->reshipSettlement)()->net_payout)->toBe(-1200)
+        ->and(AdminActivityLog::where('action', 'shipping.booking_retried')->count())->toBe(2);
+
+    // A booked shipment cannot be booked again
+    ($this->shipmentPage)($reship->id)->call('retryBooking')->assertSee('not waiting for a courier booking');
+    $page()->assertSee('data-test="fake-simulation-toolbar"', false);
+});
+
+test('cancelling a failed reship booking restores stock, reverses the charge and returns the item to the queue', function () {
+    app(CarrierManagerInterface::class)->driver('fake')->shouldFailCreation = true;
+
+    ($this->queue)()->call('reshipUndeliveredItem', $this->item->id);
+    $reship = ($this->reshipShipment)();
+
+    ($this->shipmentPage)($reship->id)->call('cancelShipment')->assertSee('reship cancelled, stock restored');
+
+    expect($this->listing->fresh()->stock)->toBe(5)
+        ->and(($this->reshipSettlement)()->status)->toBe(SettlementStatus::Void)
+        ->and(($this->reshipSettlement)()->net_payout)->toBe(0)
+        ->and($this->item->fresh()->status)->toBe(UndeliveredItem::STATUS_PENDING)
+        ->and($reship->fresh()->status)->toBe(ShipmentStatus::Cancelled);
+});

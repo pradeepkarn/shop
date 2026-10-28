@@ -11,6 +11,7 @@ use App\Shipping\Contracts\ShipmentServiceInterface;
 use App\Shipping\Drivers\FakeCarrierDriver;
 use App\Shipping\Drivers\ShiprocketCarrierDriver;
 use App\Shipping\DTOs\CreateShipmentRequestDto;
+use App\Shipping\DTOs\CreateShipmentResponseDto;
 use App\Shipping\DTOs\ShipmentSummaryDto;
 use App\Shipping\DTOs\TrackingStatusDto;
 use App\Shipping\Enums\ShipmentDirection;
@@ -222,7 +223,120 @@ class ShipmentService implements ShipmentServiceInterface
         });
     }
 
-    public function createReshipShipment(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto
+    public function createReshipBooking(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto
+    {
+        $parent = $this->originalShipmentFor($sellerOrderId);
+
+        return $this->createPendingBooking($parent, ShipmentPurpose::Reship, $units, [
+            'is_cod' => $codAmountPaise > 0,
+            'cod_amount_paise' => $codAmountPaise,
+            'declared_value_paise' => $declaredValuePaise,
+        ]);
+    }
+
+    public function createReturnPickupBooking(string $sellerOrderId, array $units, int $declaredValuePaise, string $returnReason): ShipmentSummaryDto
+    {
+        $parent = $this->originalShipmentFor($sellerOrderId);
+
+        return $this->createPendingBooking($parent, ShipmentPurpose::CustomerReturn, $units, [
+            'is_cod' => false,
+            'cod_amount_paise' => 0,
+            'declared_value_paise' => $declaredValuePaise,
+            'return_reason' => substr($returnReason, 0, 120),
+        ]);
+    }
+
+    public function bookShipment(string $shipmentId): ShipmentSummaryDto
+    {
+        // Claim the booking atomically (no lock is held while the courier is called); a second click finds nothing to claim
+        $claimed = Shipment::where('id', $shipmentId)
+            ->whereIn('booking_status', [Shipment::BOOKING_PENDING, Shipment::BOOKING_FAILED])
+            ->update(['booking_status' => Shipment::BOOKING_IN_PROGRESS, 'booking_error' => null]);
+        if ($claimed === 0) {
+            throw new DomainException('This shipment is not waiting for a courier booking.');
+        }
+
+        /** @var Shipment $shipment */
+        $shipment = Shipment::with('items')->findOrFail($shipmentId);
+        $driver = $this->carrierManager->driver($shipment->provider);
+
+        try {
+            $details = $this->shippingDetailsLookup->getShippingDetails($shipment->seller_order_id);
+            if (! $details) {
+                throw new DomainException("Order details not found for seller order {$shipment->seller_order_id}.");
+            }
+
+            $units = $shipment->items->mapWithKeys(fn (ShipmentItem $item) => [$item->order_item_id => $item->qty])->all();
+            $bookingDetails = $details->forReship($units, $shipment->cod_amount_paise, (int) $shipment->declared_value_paise);
+            $invoice = $this->orderFulfillment->getOrCreateInvoiceNumber($shipment->seller_order_id);
+            $requestDto = new CreateShipmentRequestDto(
+                sellerOrderId: $shipment->seller_order_id,
+                actualWeightGrams: $shipment->actual_weight_grams,
+                lengthCm: $shipment->length_cm,
+                widthCm: $shipment->width_cm,
+                heightCm: $shipment->height_cm,
+                preferredDispatchDate: null,
+                pickupLocationAlias: 'WH-'.$details->sellerProfileId,
+            );
+
+            $response = match (true) {
+                $shipment->isReverse() => $driver->createReverseShipment($requestDto, $bookingDetails, $invoice, (string) $shipment->return_reason, $shipment),
+                $driver instanceof ShiprocketCarrierDriver => $driver->createShipment($requestDto, $bookingDetails, $invoice, $shipment),
+                default => $driver->createShipment($requestDto, $bookingDetails, $invoice),
+            };
+        } catch (\Throwable $e) {
+            $response = new CreateShipmentResponseDto(success: false, awb: null, vendorWbn: null, publicTrackingUrl: null, errorMessage: $e->getMessage());
+        }
+
+        if (! $response->success || empty($response->awb)) {
+            // Kept for retry: same shipment, same items; nothing is reserved or charged again
+            $shipment->update([
+                'booking_status' => Shipment::BOOKING_FAILED,
+                'booking_error' => substr((string) ($response->errorMessage ?? 'Courier booking failed'), 0, 2000),
+            ]);
+
+            return $this->summary($shipment->id);
+        }
+
+        $rawMeta = $response->rawResponse ?? [];
+        $shipment->update([
+            'courier_name' => $rawMeta['courier_name'] ?? $shipment->courier_name,
+            'awb' => $response->awb,
+            'vendor_wbn' => $response->vendorWbn,
+            'provider_order_id' => $shipment->provider_order_id ?? (isset($rawMeta['shiprocket_order_id']) ? (string) $rawMeta['shiprocket_order_id'] : null),
+            'provider_shipment_id' => $shipment->provider_shipment_id ?? (isset($rawMeta['shiprocket_shipment_id']) ? (string) $rawMeta['shiprocket_shipment_id'] : null),
+            'creation_step' => 'label_ready',
+            'booking_status' => Shipment::BOOKING_BOOKED,
+            'public_tracking_url' => $response->publicTrackingUrl,
+            'estimated_carrier_charges_paise' => $response->estimatedChargesPaise,
+            'raw_metadata' => $response->rawResponse,
+        ]);
+
+        ShipmentEvent::firstOrCreate(['event_key' => "{$shipment->id}:created"], [
+            'shipment_id' => $shipment->id,
+            'event_type' => ShipmentEventType::ShipmentCreated,
+            'provider' => $driver->name(),
+            'status' => ShipmentStatus::Created,
+            'provider_status' => 'Created',
+            'description' => $shipment->isReverse() ? 'Return pickup booked with carrier' : 'Shipment booked with carrier',
+            'occurred_at' => now(),
+            'received_at' => now(),
+        ]);
+
+        if (! $shipment->isReverse()) {
+            try {
+                $labelPath = "shipping_labels/{$shipment->id}.pdf";
+                Storage::disk('local')->put($labelPath, $driver->downloadLabel((string) $shipment->awb));
+                $shipment->update(['label_path' => $labelPath, 'label_generated_at' => now()]);
+            } catch (\Throwable $e) {
+                Log::warning('Label download deferred', ['shipment_id' => $shipment->id, 'error' => $e->getMessage()]);
+            }
+        }
+
+        return $this->summary($shipment->id);
+    }
+
+    protected function originalShipmentFor(string $sellerOrderId): Shipment
     {
         /** @var Shipment|null $parent */
         $parent = Shipment::where('seller_order_id', $sellerOrderId)
@@ -231,42 +345,35 @@ class ShipmentService implements ShipmentServiceInterface
             ->where('status', '!=', ShipmentStatus::Cancelled->value)
             ->latest()
             ->first();
+
         if (! $parent) {
-            throw new DomainException("Seller order {$sellerOrderId} has no original shipment to reship from.");
+            throw new DomainException("Seller order {$sellerOrderId} has no original shipment.");
         }
 
-        $details = $this->shippingDetailsLookup->getShippingDetails($sellerOrderId);
-        if (! $details) {
-            throw new DomainException("Order details not found for seller order {$sellerOrderId}.");
-        }
-        $reshipDetails = $details->forReship($units, $codAmountPaise, $declaredValuePaise);
+        return $parent;
+    }
 
-        // Same courier and box as the original package; the courier is asked to collect only what is still owed
-        $driver = $this->carrierManager->driver($parent->provider);
-        $invoice = $this->orderFulfillment->getOrCreateInvoiceNumber($sellerOrderId);
-        $attempt = Shipment::where('seller_order_id', $sellerOrderId)->count() + 1;
-
-        $requestDto = new CreateShipmentRequestDto(
-            sellerOrderId: $sellerOrderId,
-            actualWeightGrams: $parent->actual_weight_grams,
-            lengthCm: $parent->length_cm,
-            widthCm: $parent->width_cm,
-            heightCm: $parent->height_cm,
-            preferredDispatchDate: null,
-            pickupLocationAlias: 'WH-'.$details->sellerProfileId,
-        );
-
-        /** @var Shipment $reship */
-        $reship = Shipment::create([
-            'seller_order_id' => $sellerOrderId,
+    /**
+     * Database only (safe inside a transaction): the shipment row and its items, waiting for bookShipment().
+     *
+     * @param  array<int, int>  $units
+     * @param  array<string, mixed>  $attributes
+     */
+    protected function createPendingBooking(Shipment $parent, ShipmentPurpose $purpose, array $units, array $attributes): ShipmentSummaryDto
+    {
+        /** @var Shipment $shipment */
+        $shipment = Shipment::create($attributes + [
+            'seller_order_id' => $parent->seller_order_id,
             'order_id' => $parent->order_id,
             'seller_profile_id' => $parent->seller_profile_id,
-            'direction' => ShipmentDirection::Forward,
-            'purpose' => ShipmentPurpose::Reship,
+            'direction' => $purpose->direction(),
+            'purpose' => $purpose,
             'parent_shipment_id' => $parent->id,
-            'provider' => $driver->name(),
-            'fulfillment_attempt' => $attempt,
+            // Same courier and box as the original package
+            'provider' => $parent->provider,
+            'fulfillment_attempt' => Shipment::where('seller_order_id', $parent->seller_order_id)->count() + 1,
             'creation_step' => 'pending',
+            'booking_status' => Shipment::BOOKING_PENDING,
             'status' => ShipmentStatus::Created,
             'actual_weight_grams' => $parent->actual_weight_grams,
             'volumetric_weight_grams' => $parent->volumetric_weight_grams,
@@ -274,57 +381,19 @@ class ShipmentService implements ShipmentServiceInterface
             'length_cm' => $parent->length_cm,
             'width_cm' => $parent->width_cm,
             'height_cm' => $parent->height_cm,
-            'is_cod' => $codAmountPaise > 0,
-            'cod_amount_paise' => $codAmountPaise,
-            'declared_value_paise' => $declaredValuePaise,
         ]);
 
         foreach ($units as $orderItemId => $count) {
-            ShipmentItem::create(['shipment_id' => $reship->id, 'order_item_id' => (int) $orderItemId, 'qty' => (int) $count]);
+            ShipmentItem::create(['shipment_id' => $shipment->id, 'order_item_id' => (int) $orderItemId, 'qty' => (int) $count]);
         }
 
-        $response = $driver instanceof ShiprocketCarrierDriver
-            ? $driver->createShipment($requestDto, $reshipDetails, $invoice, $reship)
-            : $driver->createShipment($requestDto, $reshipDetails, $invoice);
-        if (! $response->success || empty($response->awb)) {
-            throw new DomainException('Carrier reship manifestation failed: '.($response->errorMessage ?? 'Unknown error'));
-        }
+        return $this->summary($shipment->id);
+    }
 
-        $rawMeta = $response->rawResponse ?? [];
-        $reship->update([
-            'courier_name' => $rawMeta['courier_name'] ?? null,
-            'awb' => $response->awb,
-            'vendor_wbn' => $response->vendorWbn,
-            'provider_order_id' => isset($rawMeta['shiprocket_order_id']) ? (string) $rawMeta['shiprocket_order_id'] : null,
-            'provider_shipment_id' => isset($rawMeta['shiprocket_shipment_id']) ? (string) $rawMeta['shiprocket_shipment_id'] : null,
-            'creation_step' => 'label_ready',
-            'public_tracking_url' => $response->publicTrackingUrl,
-            'estimated_carrier_charges_paise' => $response->estimatedChargesPaise,
-            'raw_metadata' => $response->rawResponse,
-        ]);
-
-        ShipmentEvent::create([
-            'shipment_id' => $reship->id,
-            'event_key' => "{$reship->id}:created",
-            'event_type' => ShipmentEventType::ShipmentCreated,
-            'provider' => $driver->name(),
-            'status' => ShipmentStatus::Created,
-            'provider_status' => 'Created',
-            'description' => 'Reship of undelivered items created with carrier',
-            'occurred_at' => now(),
-            'received_at' => now(),
-        ]);
-
-        try {
-            $labelPath = "shipping_labels/{$reship->id}.pdf";
-            Storage::disk('local')->put($labelPath, $driver->downloadLabel((string) $reship->awb));
-            $reship->update(['label_path' => $labelPath, 'label_generated_at' => now()]);
-        } catch (\Throwable $e) {
-            Log::warning('Reship label download deferred', ['shipment_id' => $reship->id, 'error' => $e->getMessage()]);
-        }
-
+    protected function summary(string $shipmentId): ShipmentSummaryDto
+    {
         /** @var ShipmentSummaryDto $summary */
-        $summary = app(ShipmentLookupInterface::class)->getShipmentById($reship->id);
+        $summary = app(ShipmentLookupInterface::class)->getShipmentById($shipmentId);
 
         return $summary;
     }
@@ -368,6 +437,13 @@ class ShipmentService implements ShipmentServiceInterface
                 'occurred_at' => now(),
                 'received_at' => now(),
             ]);
+
+            // A cancelled return pickup closes the return request; the delivered order is untouched
+            if ($shipment->isReverse()) {
+                DB::afterCommit(fn () => event(new ShipmentReturnPickupCancelled((string) $shipment->id, (string) $shipment->seller_order_id, $reason)));
+
+                return;
+            }
 
             // A cancelled reship leaves the order as it is; Returns puts the items back in the queue
             if ($shipment->purpose === ShipmentPurpose::Reship) {

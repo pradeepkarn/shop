@@ -63,6 +63,14 @@ interface SellerLedgerServiceInterface
     public function reverseReshipShippingCharge(SellerOrderSettlement $reship): int;
 
     /**
+     * Reverse sale and fees (not forward shipping) for some units of lines, from the original entries, under
+     * {keyPrefix}:{type}:{item} keys. Idempotent. Returns the net amount debited.
+     *
+     * @param  array<int, array{units: int, line_qty: int}>  $lines
+     */
+    public function recordUnitReversals(SellerOrderSettlement $settlement, array $lines, string $keyPrefix): int;
+
+    /**
      * Compute current balances for a seller.
      */
     public function getSellerBalance(int $sellerId): SellerBalanceDto;

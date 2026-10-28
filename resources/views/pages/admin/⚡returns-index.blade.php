@@ -3,7 +3,10 @@
 namespace App\Livewire\Admin;
 
 use App\Orders\Models\OrderItem;
+use App\Returns\Contracts\ReturnRequestServiceInterface;
 use App\Returns\Contracts\UndeliveredItemServiceInterface;
+use App\Returns\Enums\ReturnRequestStatus;
+use App\Returns\Models\ReturnRequest;
 use App\Returns\Enums\CourierClaimStatus;
 use App\Returns\Enums\RtoAdminDecision;
 use App\Returns\Models\CourierClaim;
@@ -52,6 +55,79 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
             ->get();
     }
 
+    /** @var array<string, string> request id => rejection reason being typed */
+    public array $rejectReason = [];
+
+    /** @var array<string, string> request id => information request being typed */
+    public array $infoMessage = [];
+
+    /**
+     * Open customer return requests, oldest first.
+     */
+    #[Computed]
+    public function returnRequests()
+    {
+        return ReturnRequest::with('items')
+            ->whereIn('status', ReturnRequestStatus::activeValues())
+            ->oldest()
+            ->limit(50)
+            ->get();
+    }
+
+    public function approveReturn(string $returnRequestId, ReturnRequestServiceInterface $returns): void
+    {
+        $this->authorize('returns.manage');
+
+        try {
+            $request = $returns->approve($returnRequestId, (int) auth()->id());
+            AdminActivityLogger::log('returns.request_approved', $request, [
+                'seller_order_id' => $request->seller_order_id,
+                'reason' => $request->reason->value,
+                'reverse_shipment_id' => $request->reverse_shipment_id,
+            ]);
+
+            $pickup = $request->reverse_shipment_id ? \App\Shipping\Models\Shipment::find($request->reverse_shipment_id) : null;
+            match (true) {
+                $pickup === null => session()->flash('returns_success', 'Missing-item claim approved: the units are in the refund/reship queue below.'),
+                $pickup->isBooked() => session()->flash('returns_success', "Return approved; pickup booked (AWB {$pickup->awb})."),
+                default => session()->flash('returns_error', 'Return approved but the pickup booking failed: '.$pickup->booking_error.' Retry or cancel it from the shipment page.'),
+            };
+            unset($this->returnRequests, $this->undeliveredItems);
+        } catch (\Throwable $e) {
+            session()->flash('returns_error', 'Approval failed: '.$e->getMessage());
+        }
+    }
+
+    public function rejectReturn(string $returnRequestId, ReturnRequestServiceInterface $returns): void
+    {
+        $this->authorize('returns.manage');
+
+        try {
+            $request = $returns->reject($returnRequestId, (string) ($this->rejectReason[$returnRequestId] ?? ''), (int) auth()->id());
+            AdminActivityLogger::log('returns.request_rejected', $request, ['reason' => $request->rejection_reason]);
+
+            unset($this->rejectReason[$returnRequestId], $this->returnRequests);
+            session()->flash('returns_success', 'Return rejected; the customer will see your reason.');
+        } catch (\Throwable $e) {
+            session()->flash('returns_error', 'Rejection failed: '.$e->getMessage());
+        }
+    }
+
+    public function requestReturnInfo(string $returnRequestId, ReturnRequestServiceInterface $returns): void
+    {
+        $this->authorize('returns.manage');
+
+        try {
+            $request = $returns->requestInfo($returnRequestId, (string) ($this->infoMessage[$returnRequestId] ?? ''), (int) auth()->id());
+            AdminActivityLogger::log('returns.info_requested', $request, ['message' => $request->info_request_message]);
+
+            unset($this->infoMessage[$returnRequestId], $this->returnRequests);
+            session()->flash('returns_success', 'Asked the customer for more information.');
+        } catch (\Throwable $e) {
+            session()->flash('returns_error', 'Could not request information: '.$e->getMessage());
+        }
+    }
+
     public function refundUndeliveredItem(string $undeliveredItemId, UndeliveredItemServiceInterface $queue): void
     {
         $this->authorize('returns.manage');
@@ -87,7 +163,10 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
                 'reship_shipment_id' => $item->reship_shipment_id,
             ]);
 
-            session()->flash('returns_success', 'Reship created: stock reserved and the seller charged the reship shipping.');
+            $booking = \App\Shipping\Models\Shipment::find($item->reship_shipment_id);
+            $booking?->isBooked()
+                ? session()->flash('returns_success', 'Reship created: stock reserved and the seller charged the reship shipping.')
+                : session()->flash('returns_error', 'Reship created but the courier booking failed: '.($booking?->booking_error ?? 'unknown error').' Retry or cancel it from the shipment page.');
             unset($this->undeliveredItems);
         } catch (\Throwable $e) {
             session()->flash('returns_error', 'Reship failed: '.$e->getMessage());
@@ -108,6 +187,61 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
         <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-800 dark:border-red-900/50 dark:bg-red-950/50 dark:text-red-300">{{ session('returns_error') }}</div>
     @endif
 
+    {{-- Customer return requests --}}
+    <div data-test="return-requests" class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-3">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-3 dark:border-zinc-800">
+            Return requests ({{ $this->returnRequests->count() }})
+        </h2>
+
+        @php $requestItems = OrderItem::whereIn('id', $this->returnRequests->flatMap->items->pluck('order_item_id'))->get()->keyBy('id'); @endphp
+
+        @forelse ($this->returnRequests as $request)
+            <div data-test="return-request-{{ $request->id }}" class="rounded-xl bg-zinc-50 p-4 text-xs dark:bg-zinc-800/60 space-y-2">
+                <div class="flex flex-col sm:flex-row sm:justify-between gap-1">
+                    <div>
+                        <span class="font-bold text-zinc-900 dark:text-white">{{ $request->reason->label() }}</span>
+                        <span class="text-zinc-500">&middot; wants a {{ $request->preference }}</span>
+                        <p class="text-zinc-600 dark:text-zinc-300">
+                            @foreach ($request->items as $line)
+                                {{ $requestItems->get($line->order_item_id)?->title ?? 'Item #'.$line->order_item_id }} &times; {{ $line->units }}@if (! $loop->last), @endif
+                            @endforeach
+                        </p>
+                        @if ($request->customer_notes)<p class="text-zinc-500">“{{ $request->customer_notes }}”</p>@endif
+                        @if ($request->customer_response)<p class="text-zinc-500">Customer replied: “{{ $request->customer_response }}”</p>@endif
+                        @if ($request->window_override_by_admin_id)<p class="font-semibold text-amber-700">Created after the return window (admin override)</p>@endif
+                    </div>
+                    <div class="text-right">
+                        <span class="rounded-lg bg-zinc-200 px-2 py-0.5 font-bold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200" data-test="return-status">{{ $request->status->label() }}</span>
+                        <p class="mt-1 text-zinc-500">{{ count($request->photos ?? []) }} photo(s)</p>
+                        @if ($request->reverse_shipment_id)
+                            <a href="{{ route('admin.shipments.show', ['shipment' => $request->reverse_shipment_id]) }}" wire:navigate class="font-bold text-indigo-600 underline dark:text-indigo-400">Return pickup &rarr;</a>
+                        @endif
+                    </div>
+                </div>
+
+                @can('returns.manage')
+                    @if (in_array($request->status, [ReturnRequestStatus::Requested, ReturnRequestStatus::InfoRequested], true))
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+                            <button type="button" wire:click="approveReturn('{{ $request->id }}')" wire:confirm="Approve this return? {{ $request->reason->needsPickup() ? 'A pickup will be booked from the customer.' : 'The seller is debited for the missing units and they move to the refund/reship queue.' }}" data-test="approve-return-btn" class="rounded-lg bg-emerald-600 px-3 py-1.5 font-bold text-white hover:bg-emerald-700">Approve</button>
+                            <div class="flex gap-1">
+                                <input wire:model="rejectReason.{{ $request->id }}" type="text" placeholder="Reason for rejection" class="flex-1 rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                                <button type="button" wire:click="rejectReturn('{{ $request->id }}')" wire:confirm="Reject this return? The customer will see your reason." data-test="reject-return-btn" class="rounded-lg border border-red-300 px-3 py-1.5 font-bold text-red-600">Reject</button>
+                            </div>
+                            @if ($request->status === ReturnRequestStatus::Requested)
+                                <div class="flex gap-1">
+                                    <input wire:model="infoMessage.{{ $request->id }}" type="text" placeholder="What do you need to know?" class="flex-1 rounded-lg border border-zinc-300 bg-white p-1.5 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                                    <button type="button" wire:click="requestReturnInfo('{{ $request->id }}')" data-test="request-info-btn" class="rounded-lg border border-zinc-300 px-3 py-1.5 font-bold text-zinc-700 dark:text-zinc-300">Ask</button>
+                                </div>
+                            @endif
+                        </div>
+                    @endif
+                @endcan
+            </div>
+        @empty
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">No open return requests.</p>
+        @endforelse
+    </div>
+
     {{-- Undelivered items queue: one decision per item (refund or reship) --}}
     <div data-test="undelivered-items" class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-3">
         <h2 class="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-100 pb-3 dark:border-zinc-800">
@@ -121,6 +255,9 @@ new #[Layout('layouts.admin')] #[Title('Returns & Claims')] class extends Compon
                 <div>
                     <span class="font-bold text-zinc-900 dark:text-white">{{ $orderItems->get($item->order_item_id)?->title ?? 'Item #'.$item->order_item_id }}</span>
                     <span class="text-zinc-500">&times; {{ $item->units }}</span>
+                    @if ($item->origin === UndeliveredItem::ORIGIN_MISSING_ITEM_CLAIM)
+                        <span data-test="missing-item-claim" class="ml-1 font-semibold text-indigo-700 dark:text-indigo-300">(missing-item claim; customer paid)</span>
+                    @endif
                     @if ($item->reship_attempts > 0 && $item->status === UndeliveredItem::STATUS_PENDING)
                         <span class="ml-1 text-amber-700 dark:text-amber-400">(reship came back)</span>
                     @endif

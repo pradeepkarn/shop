@@ -410,6 +410,42 @@ class SellerLedgerService implements SellerLedgerServiceInterface
         return (int) -$charges->sum('amount');
     }
 
+    public function recordUnitReversals(SellerOrderSettlement $settlement, array $lines, string $keyPrefix): int
+    {
+        $originalPrefix = "settlement:{$settlement->seller_order_id}:";
+
+        DB::transaction(function () use ($settlement, $lines, $keyPrefix, $originalPrefix) {
+            $originals = SellerLedgerEntry::where('seller_order_id', $settlement->seller_order_id)
+                ->whereIn('order_item_id', array_keys($lines))
+                ->where('source_key', 'like', $originalPrefix.'%')
+                ->whereNotIn('type', [
+                    LedgerEntryType::ShippingFee->value,
+                    LedgerEntryType::Reversal->value,
+                    LedgerEntryType::Payout->value,
+                    LedgerEntryType::Adjustment->value,
+                ])
+                ->get();
+
+            foreach ($originals as $entry) {
+                $line = $lines[(int) $entry->order_item_id];
+
+                $this->createEntryIfNotExists([
+                    'seller_profile_id' => $entry->seller_profile_id,
+                    'seller_order_id' => $entry->seller_order_id,
+                    'order_item_id' => $entry->order_item_id,
+                    'payout_id' => null,
+                    'type' => LedgerEntryType::Reversal,
+                    'amount' => -self::scaleToUnits($entry->amount, $line['units'], $line['line_qty']),
+                    'description' => "Reversal ({$line['units']} unit(s) returned or missing): {$entry->description}",
+                    'source_key' => "{$keyPrefix}:".substr($entry->source_key, strlen($originalPrefix)),
+                    'created_at' => CarbonImmutable::now(),
+                ]);
+            }
+        });
+
+        return (int) -SellerLedgerEntry::where('source_key', 'like', "{$keyPrefix}:%")->sum('amount');
+    }
+
     /**
      * Share of a whole-line amount for some of its units; all units get the full amount (no rounding drift).
      */

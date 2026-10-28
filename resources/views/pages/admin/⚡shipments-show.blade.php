@@ -83,6 +83,29 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         }
     }
 
+    public function retryBooking(ShipmentServiceInterface $shipmentService): void
+    {
+        $this->authorize('shipping.manage');
+
+        $shipmentModel = $this->shipment;
+        if (! $shipmentModel) {
+            return;
+        }
+
+        try {
+            $result = $shipmentService->bookShipment($shipmentModel->id);
+
+            AdminActivityLogger::log('shipping.booking_retried', $shipmentModel, ['awb' => $result->awb]);
+
+            $result->awb
+                ? session()->flash('shipment_success', "Courier booking succeeded (AWB {$result->awb}).")
+                : session()->flash('shipment_error', 'Courier booking failed again: '.(Shipment::find($shipmentModel->id)?->booking_error ?? 'unknown error'));
+            unset($this->shipment);
+        } catch (\Throwable $e) {
+            session()->flash('shipment_error', 'Retry failed: '.$e->getMessage());
+        }
+    }
+
     public function cancelShipment(?ShipmentServiceInterface $shipmentService = null): void
     {
         $this->authorize('shipping.manage');
@@ -102,7 +125,11 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
             );
 
             AdminActivityLogger::log('shipping.cancelled', $shipmentModel);
-            session()->flash('shipment_success', 'Shipment cancelled and seller order reverted to Packed.');
+            session()->flash('shipment_success', match ($shipmentModel->purpose) {
+                \App\Shipping\Enums\ShipmentPurpose::Reship => 'Shipment cancelled: reship cancelled, stock restored and the item is back in the queue.',
+                \App\Shipping\Enums\ShipmentPurpose::CustomerReturn => 'Shipment cancelled: return pickup cancelled and the return request closed.',
+                default => 'Shipment cancelled and seller order reverted to Packed.',
+            });
             unset($this->shipment);
         } catch (\Throwable $e) {
             session()->flash('shipment_error', 'Cancellation failed: '.$e->getMessage());
@@ -328,8 +355,26 @@ new #[Layout('layouts.admin')] #[Title('Shipment Details')] class extends Compon
         $rtoReport = $canViewReturns ? $returnsLookup->getRtoReportForShipment($shipmentModel->id) : null;
         $courierClaims = $canViewReturns ? $returnsLookup->getClaimsForShipment($shipmentModel->id) : [];
         $orderModel = $this->sellerOrder;
-        $isFakeSimulation = $shipmentModel->provider === 'fake' && (bool) config('shipping.fake_simulation_enabled', false);
+        // Only a shipment booked with the courier can move through courier statuses
+        $isFakeSimulation = $shipmentModel->provider === 'fake' && $shipmentModel->isBooked() && (bool) config('shipping.fake_simulation_enabled', false);
     @endphp
+
+    @if (! $shipmentModel->isBooked())
+        <div data-test="booking-card" class="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 space-y-3">
+            <p class="font-bold" data-test="booking-status">Courier booking: {{ str_replace('_', ' ', $shipmentModel->booking_status) }}</p>
+            @if ($shipmentModel->booking_error)
+                <p data-test="booking-error">{{ $shipmentModel->booking_error }}</p>
+            @endif
+            @if ($shipmentModel->booking_status === \App\Shipping\Models\Shipment::BOOKING_FAILED)
+                @can('shipping.manage')
+                    <div class="flex gap-2">
+                        <button type="button" wire:click="retryBooking" data-test="retry-booking-btn" class="rounded-lg bg-amber-600 px-3 py-1.5 font-bold text-white hover:bg-amber-700">Retry booking</button>
+                        <button type="button" wire:click="cancelShipment" wire:confirm="Cancel this shipment? Reserved stock is restored and any shipping charge reversed." data-test="cancel-booking-btn" class="rounded-lg border border-amber-400 px-3 py-1.5 font-bold text-amber-900 hover:bg-amber-100 dark:text-amber-200">Cancel {{ $shipmentModel->isReverse() ? 'return pickup' : 'reship' }}</button>
+                    </div>
+                @endcan
+            @endif
+        </div>
+    @endif
 
     {{-- Fake Driver Simulation Toolbar (Admin only, fake carrier only, enabled only via config) --}}
     @if ($isFakeSimulation)

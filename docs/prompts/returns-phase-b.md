@@ -84,6 +84,31 @@ from stored refund rows, never from the caller. One refund per source (unique).
 - Permission `refunds.manage` (AdminPermissions, sync, RBAC datasets); activity log for refund
   status changes.
 
+## B4 follow-up: courier calls outside transactions
+
+Never call a courier inside a DB transaction. Reships and return pickups are created in one transaction
+(stock reserved, shipment row in `booking_status = pending`, charges applied) and committed; the courier
+is called afterwards with no locks held. Success → AWB/label saved (`booked`). Failure → `failed` with the
+error; the admin can **Retry booking** (same shipment, nothing reserved or charged again; step-based
+carriers like Shiprocket resume from the saved step) or **Cancel** (restock + reverse charge, item back to
+the queue; a cancelled return pickup closes the return request).
+
+## B5: return eligibility
+
+- Eligibility uses the **return window saved at delivery** (on the package's settlement), never the
+  vertical's current window: later edits to a vertical never change eligibility for orders already
+  delivered. Deadline = delivery date + saved window; units delivered later by a reship count from the
+  reship delivery date. (If a package has no settlement, the verticals' current windows are used.)
+- Per unit: available = delivered − in returns (any request not rejected/closed) − not delivered.
+- Non-returnable verticals only accept damaged, defective, wrong item or missing item/part.
+- Window expired → blocked; an admin may create the request anyway (override, logged as
+  `returns.window_override`).
+- One active return per seller package; an open return holds the package's settlement (no release, no
+  payout) until it is closed, rejected or resolved.
+- Missing-item claims skip the pickup: approval reverses the seller's sale and fees for those units (in a
+  separate `return` settlement, carried into the next payout) and hands them to the B4 refund/reship
+  queue with `customer_paid = true` (refund pending, or reship collecting nothing).
+
 ## Chunks
 
 - B2: shipment direction/purpose/items; reverse lifecycle; Fake reverse toolbar. (done)

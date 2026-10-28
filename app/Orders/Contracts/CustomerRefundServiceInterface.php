@@ -22,6 +22,11 @@ interface CustomerRefundServiceInterface
     public function refundedUnits(int $orderItemId): int;
 
     /**
+     * Does the customer still have money owed back (pending or failed refunds)? Blocks account deletion.
+     */
+    public function hasOpenRefunds(int $userId): bool;
+
+    /**
      * Was the customer charged for units that were never delivered? (COD: no — only delivered items were collected.)
      */
     public function customerChargedForUndeliveredUnits(string $sellerOrderId): bool;

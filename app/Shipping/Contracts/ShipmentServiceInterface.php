@@ -27,12 +27,26 @@ interface ShipmentServiceInterface
     ): Shipment;
 
     /**
-     * Reship undelivered units of a partially delivered order: a forward shipment (purpose reship, parent = the original
-     * shipment) carrying only those units, collecting $codAmountPaise. The seller order status is not changed.
+     * Reship undelivered units: a forward shipment (purpose reship, parent = the original shipment) carrying only those
+     * units and collecting $codAmountPaise. Database only (safe inside a transaction); call bookShipment() after commit.
      *
      * @param  array<int, int>  $units  order item id => units
      */
-    public function createReshipShipment(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto;
+    public function createReshipBooking(string $sellerOrderId, array $units, int $codAmountPaise, int $declaredValuePaise): ShipmentSummaryDto;
+
+    /**
+     * Return pickup of units from the customer (the order's delivery address) to the seller. Database only; call
+     * bookShipment() after commit.
+     *
+     * @param  array<int, int>  $units  order item id => units
+     */
+    public function createReturnPickupBooking(string $sellerOrderId, array $units, int $declaredValuePaise, string $returnReason): ShipmentSummaryDto;
+
+    /**
+     * Book a pending (or retry a failed) shipment with its courier. Never call inside a DB transaction: no locks are
+     * held during the courier call. On failure the shipment stays booking_failed with the error, ready to retry.
+     */
+    public function bookShipment(string $shipmentId): ShipmentSummaryDto;
 
     /**
      * Cancel an active shipment. Reverts seller order to Packed (a cancelled reship only reports the cancellation).

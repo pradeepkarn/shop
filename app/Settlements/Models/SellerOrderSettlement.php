@@ -22,6 +22,7 @@ use Illuminate\Support\Carbon;
  * @property int $claimable_credits
  * @property SettlementStatus $status
  * @property bool $is_partial_delivery_hold
+ * @property bool $is_return_hold
  * @property string $kind
  * @property string $reference_id
  * @property int $return_window_days
@@ -41,11 +42,14 @@ class SellerOrderSettlement extends Model
 
     public const KIND_RESHIP = 'reship';
 
+    public const KIND_RETURN = 'return';
+
     protected $attributes = [
         'kind' => self::KIND_ORDER,
         'reference_id' => '',
         'claimable_credits' => 0,
         'is_partial_delivery_hold' => false,
+        'is_return_hold' => false,
     ];
 
     protected $fillable = [
@@ -61,6 +65,7 @@ class SellerOrderSettlement extends Model
         'claimable_credits',
         'status',
         'is_partial_delivery_hold',
+        'is_return_hold',
         'return_window_days',
         'hold_until',
         'payout_id',
@@ -79,6 +84,7 @@ class SellerOrderSettlement extends Model
             'claimable_credits' => 'integer',
             'status' => SettlementStatus::class,
             'is_partial_delivery_hold' => 'boolean',
+            'is_return_hold' => 'boolean',
             'return_window_days' => 'integer',
             'hold_until' => 'datetime',
             'paid_at' => 'datetime',
