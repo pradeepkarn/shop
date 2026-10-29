@@ -20,7 +20,8 @@
             <!-- Brand Logo -->
             <div class="flex items-center gap-6">
                 <a href="{{ route('products.index') }}" class="flex items-center gap-2.5 font-bold tracking-tight text-zinc-900 dark:text-white" wire:navigate>
-                    <x-brand.logo area="storefront" size="lg" />
+                    {{-- Slightly smaller on the narrowest phones so the header row still fits --}}
+                    <x-brand.logo area="storefront" size="lg" class="max-[359px]:h-7" />
                 </a>
 
                 <nav class="hidden xl:flex items-center gap-1">
@@ -46,7 +47,10 @@
 
             <!-- Theme, Cart & Customer Account / Auth Links -->
             <div class="flex items-center gap-2 sm:gap-3">
-                <x-theme-switcher />
+                {{-- Hidden on phones so the logo and account links fit one row --}}
+                <div class="hidden sm:block">
+                    <x-theme-switcher />
+                </div>
 
                 <livewire:header-cart-badge />
 
