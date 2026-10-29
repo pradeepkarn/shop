@@ -131,6 +131,13 @@ return [
     |
     */
 
-    'serializable_classes' => false,
+    'serializable_classes' => [
+        App\Content\DTOs\ResolvedPageData::class,
+        App\Content\DTOs\ResolvedSectionData::class,
+        App\Content\DTOs\ResolvedItemData::class,
+        App\Content\DTOs\ResolvedLinkData::class,
+        App\Content\DTOs\ResolvedMediaData::class,
+        App\Shipping\DTOs\ServiceabilityResultDto::class,
+    ],
 
 ];
