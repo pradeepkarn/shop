@@ -1,5 +1,11 @@
 <?php
 
+use App\Content\DTOs\ResolvedItemData;
+use App\Content\DTOs\ResolvedLinkData;
+use App\Content\DTOs\ResolvedMediaData;
+use App\Content\DTOs\ResolvedPageData;
+use App\Content\DTOs\ResolvedSectionData;
+use App\Shipping\DTOs\ServiceabilityResultDto;
 use Illuminate\Support\Str;
 
 return [
@@ -132,12 +138,12 @@ return [
     */
 
     'serializable_classes' => [
-        App\Content\DTOs\ResolvedPageData::class,
-        App\Content\DTOs\ResolvedSectionData::class,
-        App\Content\DTOs\ResolvedItemData::class,
-        App\Content\DTOs\ResolvedLinkData::class,
-        App\Content\DTOs\ResolvedMediaData::class,
-        App\Shipping\DTOs\ServiceabilityResultDto::class,
+        ResolvedPageData::class,
+        ResolvedSectionData::class,
+        ResolvedItemData::class,
+        ResolvedLinkData::class,
+        ResolvedMediaData::class,
+        ServiceabilityResultDto::class,
     ],
 
 ];
