@@ -12,6 +12,8 @@ use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Product;
 use App\Models\Vertical;
+use App\Search\Contracts\ProductSearchInterface;
+use App\Search\DTOs\SearchResult;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -24,6 +26,9 @@ use Livewire\WithPagination;
 
 new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Component {
     use WithPagination;
+
+    #[Url(except: '')]
+    public string $q = '';
 
     #[Url(except: '')]
     public string $category = '';
@@ -51,6 +56,17 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
 
     #[Url(except: 'featured')]
     public string $sort = 'featured';
+
+    public function updatedQ(): void
+    {
+        $this->resetPage();
+    }
+
+    public function clearSearch(): void
+    {
+        $this->q = '';
+        $this->resetPage();
+    }
 
     public function updatedCategory(): void
     {
@@ -262,10 +278,32 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
     #[Computed]
     public function availableBrands(): Collection
     {
+        $searchResult = $this->searchResult;
+
         return Brand::where('status', BrandStatus::Approved)
-            ->whereHas('products', fn ($q) => $q->where('qc_status', ProductQcStatus::Approved)->whereNotNull('buy_box_listing_id'))
+            ->whereHas('products', function ($q) use ($searchResult) {
+                $q->where('qc_status', ProductQcStatus::Approved)->whereNotNull('buy_box_listing_id');
+
+                // While searching, only offer brands that have matching products
+                if ($searchResult) {
+                    $q->whereIntegerInRaw('products.id', $searchResult->productIds);
+                }
+            })
             ->orderBy('name')
             ->get();
+    }
+
+    /**
+     * Search matches for the query (ordered product IDs), or null when not searching.
+     */
+    #[Computed]
+    public function searchResult(): ?SearchResult
+    {
+        if (blank(trim($this->q))) {
+            return null;
+        }
+
+        return app(ProductSearchInterface::class)->search($this->q);
     }
 
     /**
@@ -283,6 +321,12 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
                 'buyBoxListing.sellerProfile',
                 'buyBoxListing.variant',
             ]);
+
+        // 0. Search: restrict to matches (price, stock and filters below stay live from the database)
+        $searchResult = $this->searchResult;
+        if ($searchResult) {
+            $query->whereIntegerInRaw('id', $searchResult->productIds);
+        }
 
         // 1. Category & Vertical Filter
         if (filled($this->vertical)) {
@@ -369,8 +413,18 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
             'newest' => function (Builder $q) {
                 $q->orderByDesc('in_stock')->orderByDesc('id');
             },
-            'featured' => function (Builder $q) {
-                $q->orderByDesc('in_stock')->orderByDesc('id');
+            'featured' => function (Builder $q) use ($searchResult) {
+                $q->orderByDesc('in_stock');
+
+                // While searching, "featured" is relevance: the engine's order
+                if ($searchResult && ! $searchResult->isEmpty()) {
+                    $positions = collect($searchResult->productIds)
+                        ->map(fn (int $id, int $position) => 'WHEN '.(int) $id.' THEN '.$position)
+                        ->implode(' ');
+                    $q->orderByRaw("CASE id {$positions} END");
+                }
+
+                $q->orderByDesc('id');
             },
         ];
 
@@ -490,7 +544,9 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
                 @endif
             </nav>
             <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">
-                @if ($vertical)
+                @if ($this->searchResult)
+                    Results for "{{ $this->searchResult->query }}"
+                @elseif ($vertical)
                     {{ ucwords(str_replace('-', ' ', $vertical)) }}
                 @elseif ($category)
                     {{ ucwords(str_replace('-', ' ', $category)) }}
@@ -499,6 +555,15 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
                 @endif
                 <span class="ml-2 text-sm font-normal text-zinc-500 dark:text-zinc-400">({{ $this->products->total() }} items)</span>
             </h1>
+            @if ($this->searchResult)
+                <button
+                    type="button"
+                    wire:click="clearSearch"
+                    class="mt-1 text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 underline"
+                >
+                    Clear search
+                </button>
+            @endif
         </div>
 
         <!-- Sort Control -->
@@ -509,7 +574,7 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
                 wire:model.live="sort"
                 class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-800 shadow-xs focus:border-amber-500 focus:outline-hidden focus:ring-2 focus:ring-amber-500/20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
             >
-                <option value="featured">Featured</option>
+                <option value="featured">{{ $this->searchResult ? 'Relevance' : 'Featured' }}</option>
                 <option value="price_asc">Price: Low to High</option>
                 <option value="price_desc">Price: High to Low</option>
                 <option value="discount_desc">Biggest Discount</option>
@@ -845,17 +910,31 @@ new #[Layout('layouts.storefront')] #[Title('Browse Products')] class extends Co
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
                         </svg>
                     </div>
-                    <h3 class="text-base font-semibold text-zinc-900 dark:text-white">No products found</h3>
-                    <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
-                        We couldn't find any products matching your current combination of filters. Try clearing some filters.
-                    </p>
-                    <button
-                        type="button"
-                        wire:click="resetFilters"
-                        class="mt-4 inline-flex items-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-amber-600 transition"
-                    >
-                        Clear all filters
-                    </button>
+                    @if ($this->searchResult && ! $hasActiveFilters)
+                        <h3 class="text-base font-semibold text-zinc-900 dark:text-white">No results for "{{ $this->searchResult->query }}"</h3>
+                        <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
+                            Check the spelling or try a more general word.
+                        </p>
+                        <button
+                            type="button"
+                            wire:click="clearSearch"
+                            class="mt-4 inline-flex items-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-amber-600 transition"
+                        >
+                            Browse all products
+                        </button>
+                    @else
+                        <h3 class="text-base font-semibold text-zinc-900 dark:text-white">No products found</h3>
+                        <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
+                            We couldn't find any products matching your current combination of filters. Try clearing some filters.
+                        </p>
+                        <button
+                            type="button"
+                            wire:click="resetFilters"
+                            class="mt-4 inline-flex items-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-amber-600 transition"
+                        >
+                            Clear all filters
+                        </button>
+                    @endif
                 </div>
             @else
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
