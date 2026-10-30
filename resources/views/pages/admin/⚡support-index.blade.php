@@ -69,6 +69,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             'resolved' => (int) ($byStatus[TicketStatus::Resolved->value] ?? 0),
             'unassigned' => SupportTicket::query()->where('status', TicketStatus::Open->value)->whereNull('assigned_admin_id')->count(),
             'mine' => SupportTicket::query()->notClosed()->where('assigned_admin_id', auth('admin')->id())->count(),
+            'overdue' => SupportTicket::query()->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days')))->count(),
         ];
     }
 
@@ -80,6 +81,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         return SupportTicket::query()
             ->with(['assignee', 'linkedTicket'])
             ->when($this->status === 'active', fn ($q) => $q->notClosed())
+            ->when($this->status === 'overdue', fn ($q) => $q->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days'))))
             ->when(TicketStatus::tryFrom($this->status), fn ($q, $status) => $q->where('status', $status->value))
             ->when($this->assignee === 'mine', fn ($q) => $q->where('assigned_admin_id', auth('admin')->id()))
             ->when($this->assignee === 'unassigned', fn ($q) => $q->whereNull('assigned_admin_id'))
@@ -110,6 +112,12 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
+            <a href="{{ route('admin.support.report') }}" wire:navigate class="inline-flex items-center rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">Timelines report</a>
+            @if ($this->counts['overdue'] > 0)
+                <button type="button" wire:click="$set('status', 'overdue')" class="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 shadow-2xs hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                    Over {{ config('helpdesk.resolve_within_days') }} days: {{ $this->counts['overdue'] }}
+                </button>
+            @endif
             @can(\App\Support\AdminPermissions::SUPPORT_SETTINGS)
                 <a href="{{ route('admin.support.settings') }}" wire:navigate class="inline-flex items-center rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">Grievance officer</a>
             @endcan
@@ -141,6 +149,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             <option value="awaiting_seller">Waiting on seller ({{ $this->counts['awaiting_seller'] }})</option>
             <option value="resolved">Resolved ({{ $this->counts['resolved'] }})</option>
             <option value="closed">Closed</option>
+            <option value="overdue">Over {{ config('helpdesk.resolve_within_days') }} days, unresolved ({{ $this->counts['overdue'] }})</option>
             <option value="active">All active</option>
             <option value="all">All tickets</option>
         </select>
@@ -182,6 +191,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                         <th scope="col" class="px-4 py-3.5">Status</th>
                         <th scope="col" class="px-4 py-3.5">Priority</th>
                         <th scope="col" class="px-4 py-3.5">Assignee</th>
+                        <th scope="col" class="px-4 py-3.5">Age</th>
                         <th scope="col" class="px-4 py-3.5">Last activity</th>
                     </tr>
                 </thead>
@@ -219,11 +229,22 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                             <td class="whitespace-nowrap px-4 py-3.5 text-xs">
                                 {{ $ticket->assignee?->name ?? '—' }}
                             </td>
+                            <td class="whitespace-nowrap px-4 py-3.5 text-xs">
+                                @php($deadline = $ticket->resolutionDeadlineState())
+                                <span @class([
+                                    'font-semibold text-rose-700 dark:text-rose-400' => $deadline === 'overdue',
+                                    'font-semibold text-amber-700 dark:text-amber-400' => $deadline === 'warning',
+                                    'text-zinc-500 dark:text-zinc-400' => $deadline === null,
+                                ]) title="Opened @datetime($ticket->created_at)">{{ (int) $ticket->created_at->diffInDays(now()) }}d</span>
+                                @if ($deadline === 'overdue')
+                                    <span class="ml-1 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">Overdue</span>
+                                @endif
+                            </td>
                             <td class="whitespace-nowrap px-4 py-3.5 text-xs text-zinc-500 dark:text-zinc-400">@datetime($ticket->last_message_at)</td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="px-4 py-12 text-center text-sm text-zinc-500 dark:text-zinc-400">No tickets match these filters.</td>
+                            <td colspan="7" class="px-4 py-12 text-center text-sm text-zinc-500 dark:text-zinc-400">No tickets match these filters.</td>
                         </tr>
                     @endforelse
                 </tbody>

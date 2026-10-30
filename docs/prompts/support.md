@@ -131,3 +131,14 @@ Principle: in support, customers and sellers only ever deal with the marketplace
 
 - Inbox shows each unresolved ticket's age; warning from day 25, "Overdue" after 30 days; filter "Over 30 days".
 - Report `/admin/support/report` (per month): tickets received, acknowledged within 48 hours (the automatic email counts as acknowledgement), resolved within 30 days, still open past 30 days, median first staff response.
+
+## Checks outside support (findings, 2026-10-30)
+
+- **Cancellation charges:** none exist; customers cancel free while the package allows it. Nothing to change.
+- **Country of origin:** not stored or shown anywhere. The rules (and the Legal Metrology (Packaged Commodities) Rules for packaged goods) expect it on the product page, with manufacturer/packer details, net quantity and similar declarations. This is catalog work, not support; to be done separately.
+
+## Before launch
+
+- Fill in the grievance officer at `/admin/support/settings` (the public page says "coming shortly" until then).
+- Ask existing sellers to confirm their business name and declaration (dashboard banner).
+- Have the CA or lawyer review: the seller details page contents (registered address, GSTIN; whether a seller customer-care number must also be shown), the grievance page wording, and the 48-hour / one-month process.

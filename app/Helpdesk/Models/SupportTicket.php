@@ -137,6 +137,34 @@ class SupportTicket extends Model
         $query->where('status', '!=', TicketStatus::Closed->value);
     }
 
+    /**
+     * Not yet resolved or closed: still counts against the one-month resolution commitment.
+     *
+     * @param  Builder<SupportTicket>  $query
+     */
+    public function scopeUnresolved(Builder $query): void
+    {
+        $query->whereNotIn('status', [TicketStatus::Resolved->value, TicketStatus::Closed->value]);
+    }
+
+    /**
+     * "overdue" past helpdesk.resolve_within_days, "warning" from helpdesk.warn_after_days, else null.
+     */
+    public function resolutionDeadlineState(): ?string
+    {
+        if (in_array($this->status, [TicketStatus::Resolved, TicketStatus::Closed], true) || ! $this->created_at) {
+            return null;
+        }
+
+        $age = $this->created_at->diffInDays(now());
+
+        return match (true) {
+            $age >= (int) config('helpdesk.resolve_within_days') => 'overdue',
+            $age >= (int) config('helpdesk.warn_after_days') => 'warning',
+            default => null,
+        };
+    }
+
     public function isOwnedBy(int $userId): bool
     {
         return $this->user_id !== null && (int) $this->user_id === $userId;
