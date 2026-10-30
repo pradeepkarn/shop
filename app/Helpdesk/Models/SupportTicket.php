@@ -34,6 +34,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $seller_order_id
  * @property string|null $linked_ticket_id
  * @property string|null $attention
+ * @property bool $requester_unread
+ * @property CarbonInterface|null $requester_activity_at
  * @property int|null $assigned_admin_id
  * @property CarbonInterface|null $last_message_at
  * @property CarbonInterface|null $reply_due_at
@@ -69,6 +71,8 @@ class SupportTicket extends Model
             'priority' => TicketPriority::class,
             'last_message_at' => 'datetime',
             'reply_due_at' => 'datetime',
+            'requester_unread' => 'boolean',
+            'requester_activity_at' => 'datetime',
             'reminded_at' => 'datetime',
             'first_response_at' => 'datetime',
             'resolved_at' => 'datetime',
@@ -147,6 +151,35 @@ class SupportTicket extends Model
         $query->where(fn (Builder $q) => $q
             ->where('requester_type', '!=', RequesterType::Seller->value)
             ->orWhereNull('linked_ticket_id'));
+    }
+
+    /**
+     * Tickets with customer or seller activity this staff member has not opened since.
+     *
+     * @param  Builder<SupportTicket>  $query
+     */
+    public function scopeUnreadByStaff(Builder $query, int $adminId): void
+    {
+        $query->whereNotNull('requester_activity_at')
+            ->whereNotExists(fn ($reads) => $reads
+                ->selectRaw('1')
+                ->from('support_ticket_reads')
+                ->whereColumn('support_ticket_reads.support_ticket_id', 'support_tickets.id')
+                ->where('support_ticket_reads.admin_id', $adminId)
+                ->whereColumn('support_ticket_reads.read_at', '>=', 'support_tickets.requester_activity_at'));
+    }
+
+    /**
+     * Staff badge: unread, still open, and mine or nobody's.
+     *
+     * @param  Builder<SupportTicket>  $query
+     */
+    public function scopeStaffBadge(Builder $query, int $adminId): void
+    {
+        $query->caseRows()
+            ->notClosed()
+            ->unreadByStaff($adminId)
+            ->where(fn (Builder $q) => $q->whereNull('assigned_admin_id')->orWhere('assigned_admin_id', $adminId));
     }
 
     /**

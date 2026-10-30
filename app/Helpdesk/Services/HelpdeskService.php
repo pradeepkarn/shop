@@ -166,6 +166,7 @@ class HelpdeskService
                     'status' => TicketStatus::Open,
                     'priority' => TicketPriority::Normal,
                     'last_message_at' => now(),
+                    'requester_activity_at' => now(),
                     ...$requester,
                 ]);
 
@@ -221,6 +222,7 @@ class HelpdeskService
                     'status' => TicketStatus::Open,
                     'resolved_at' => null,
                     'last_message_at' => now(),
+                    'requester_activity_at' => now(),
                     'reply_due_at' => null,
                     'reminded_at' => null,
                 ]);
@@ -367,6 +369,7 @@ class HelpdeskService
                     'last_message_at' => now(),
                     'first_response_at' => now(),
                     'reply_due_at' => now()->addHours((int) config('helpdesk.seller_reply_hours')),
+                    'requester_unread' => true,
                 ]);
 
                 $sellerTicket->messages()->create([
@@ -496,6 +499,51 @@ class HelpdeskService
     }
 
     /**
+     * The customer or seller opened their ticket.
+     */
+    public function markReadByRequester(SupportTicket $ticket): void
+    {
+        if ($ticket->requester_unread) {
+            $ticket->forceFill(['requester_unread' => false])->saveQuietly();
+        }
+    }
+
+    /**
+     * A staff member opened a case: both its tickets count as read for them.
+     */
+    public function markReadByStaff(SupportTicket $ticket, int $adminId): void
+    {
+        $now = now();
+        $rows = array_map(fn (string $ticketId) => [
+            'support_ticket_id' => $ticketId,
+            'admin_id' => $adminId,
+            'read_at' => $now,
+        ], array_values(array_filter([$ticket->id, $ticket->linked_ticket_id])));
+
+        DB::table('support_ticket_reads')->upsert($rows, ['support_ticket_id', 'admin_id'], ['read_at']);
+    }
+
+    /**
+     * Tickets of this type with support replies the user has not opened.
+     */
+    public function unreadCountForRequester(int $userId, RequesterType $type): int
+    {
+        return SupportTicket::query()
+            ->where('user_id', $userId)
+            ->where('requester_type', $type->value)
+            ->where('requester_unread', true)
+            ->count();
+    }
+
+    /**
+     * Open cases, mine or unassigned, with customer or seller activity this staff member has not opened.
+     */
+    public function unreadCountForStaff(int $adminId): int
+    {
+        return SupportTicket::query()->staffBadge($adminId)->count();
+    }
+
+    /**
      * A seller replied on a linked ticket: bring the customer's ticket back to staff and mark it.
      */
     protected function flagSellerReply(SupportTicket $sellerTicket): void
@@ -506,6 +554,8 @@ class HelpdeskService
         }
 
         $customerTicket->attention = 'seller_replied';
+        // The case has new activity for staff, even though it came in on the seller side
+        $customerTicket->requester_activity_at = now();
         if ($customerTicket->status === TicketStatus::AwaitingSeller) {
             $this->applyStatus($customerTicket, TicketStatus::Open);
         } else {
@@ -529,7 +579,7 @@ class HelpdeskService
         ]);
 
         if (! $internal) {
-            $changes = ['last_message_at' => now(), 'attention' => null];
+            $changes = ['last_message_at' => now(), 'attention' => null, 'requester_unread' => true];
             if ($locked->first_response_at === null) {
                 $changes['first_response_at'] = now();
             }
@@ -635,15 +685,20 @@ class HelpdeskService
 
     protected function changeStatus(SupportTicket $ticket, Admin $admin, TicketStatus $status, TicketStatus $previous): void
     {
-        $ticket->attention = null;
-        $this->applyStatus($ticket, $status);
-
         $note = match ($status) {
             TicketStatus::Resolved => 'Marked as resolved by support.',
             TicketStatus::Closed => 'Closed by support.',
             TicketStatus::Open => $previous === TicketStatus::Closed ? 'Reopened by support.' : null,
             TicketStatus::Pending, TicketStatus::AwaitingSeller, TicketStatus::Answered => null,
         };
+
+        $ticket->attention = null;
+        if ($note) {
+            // The requester sees this note in their thread
+            $ticket->requester_unread = true;
+        }
+        $this->applyStatus($ticket, $status);
+
         if ($note) {
             $this->systemNote($ticket, $note, internal: false);
         }

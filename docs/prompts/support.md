@@ -141,6 +141,11 @@ A customer ticket and the seller ticket staff opened from it stay two tickets in
 - New seller-ticket status **`answered`**: set when staff forward the seller's reply to the customer, so the seller side stops showing as needing a reply.
 - Resolving or closing the customer ticket resolves or closes the seller side too; assigning either side assigns both.
 
+## Unread badges
+
+- **Customers and sellers:** `support_tickets.requester_unread` is set by anything support posts that they can see (public staff replies, forwarded messages, a new seller ticket from "Ask the seller", resolved/closed/reopened notes) and cleared when they open the ticket. Internal notes never set it. Badge on "Help & Support" (customer sidebar) and "Support" (seller sidebar); "New reply" on list rows. Customer and seller counts are separate for a user who is both.
+- **Staff, per person:** `support_ticket_reads` records when each staff member last opened a ticket; `support_tickets.requester_activity_at` is the last time the customer wrote (or, for a case, the seller on the linked ticket). Unread = activity after my last read. Opening a case on either tab reads both sides. Admin sidebar "Support" badge counts open cases that are unread by me and assigned to me or unassigned; the inbox marks unread rows, shows "Unread: N" and has an "Unread by me" filter.
+
 ## Checks outside support (findings, 2026-10-30)
 
 - **Cancellation charges:** none exist; customers cancel free while the package allows it. Nothing to change.

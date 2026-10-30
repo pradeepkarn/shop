@@ -73,7 +73,15 @@ new #[Layout('layouts.app')] #[Title('Help & Support')] class extends Component 
                                         <span class="text-xs text-zinc-400">&middot; Order {{ $ticket->order_number }}</span>
                                     @endif
                                 </div>
-                                <p class="mt-0.5 truncate text-sm font-semibold text-zinc-900 dark:text-white">{{ $ticket->subject }}</p>
+                                <p class="mt-0.5 flex items-center gap-2 text-sm text-zinc-900 dark:text-white">
+                                    @if ($ticket->requester_unread)
+                                        <span class="size-2 shrink-0 rounded-full bg-rose-500" title="New reply from support"></span>
+                                    @endif
+                                    <span @class(['truncate', 'font-bold' => $ticket->requester_unread, 'font-semibold' => ! $ticket->requester_unread])>{{ $ticket->subject }}</span>
+                                    @if ($ticket->requester_unread)
+                                        <span data-test="ticket-new-reply" class="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">New reply</span>
+                                    @endif
+                                </p>
                             </div>
                             <div class="flex shrink-0 items-center gap-3">
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 {{ $ticket->status->badgeClasses() }}">

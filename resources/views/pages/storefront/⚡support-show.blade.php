@@ -29,6 +29,8 @@ new #[Layout('layouts.app')] #[Title('Support Request')] class extends Component
 
         // 404 rather than 403 so ticket numbers cannot be probed
         abort_unless($this->ticket && auth()->user()->can('view', $this->ticket), 404);
+
+        app(HelpdeskService::class)->markReadByRequester($this->ticket);
     }
 
     #[Computed]

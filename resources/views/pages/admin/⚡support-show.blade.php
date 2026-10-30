@@ -86,6 +86,8 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
         if (! $found->linkedTicket) {
             $this->side = 'customer';
         }
+
+        app(HelpdeskService::class)->markReadByStaff($found, $this->admin()->id);
     }
 
     /**
@@ -222,6 +224,11 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
     protected function refreshTicket(): void
     {
         unset($this->caseTicket, $this->ticket, $this->messages, $this->otherTickets, $this->requesterAttachments, $this->forwardingMessage, $this->sellerPackages);
+
+        // Whatever arrived since the page opened is now in front of this staff member
+        if ($this->caseTicket) {
+            app(HelpdeskService::class)->markReadByStaff($this->caseTicket, $this->admin()->id);
+        }
     }
 
     public function removeAttachment(int $index): void

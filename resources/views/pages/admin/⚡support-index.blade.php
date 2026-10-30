@@ -71,8 +71,24 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             'resolved' => (int) ($byStatus[TicketStatus::Resolved->value] ?? 0),
             'unassigned' => SupportTicket::query()->caseRows()->where('status', TicketStatus::Open->value)->whereNull('assigned_admin_id')->count(),
             'mine' => SupportTicket::query()->caseRows()->notClosed()->where('assigned_admin_id', auth('admin')->id())->count(),
+            'unread' => SupportTicket::query()->staffBadge((int) auth('admin')->id())->count(),
             'overdue' => SupportTicket::query()->caseRows()->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days')))->count(),
         ];
+    }
+
+    /**
+     * Rows on this page with customer or seller activity this staff member has not opened.
+     *
+     * @return \Illuminate\Support\Collection<int, string>
+     */
+    #[Computed]
+    public function unreadIds(): \Illuminate\Support\Collection
+    {
+        $ids = collect($this->tickets->items())->pluck('id');
+
+        return $ids->isEmpty()
+            ? collect()
+            : SupportTicket::query()->whereIn('id', $ids)->unreadByStaff((int) auth('admin')->id())->pluck('id');
     }
 
     #[Computed]
@@ -84,6 +100,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             ->caseRows()
             ->with(['assignee', 'linkedTicket'])
             ->when($this->status === 'active', fn ($q) => $q->notClosed())
+            ->when($this->status === 'unread', fn ($q) => $q->notClosed()->unreadByStaff((int) auth('admin')->id()))
             ->when($this->status === 'overdue', fn ($q) => $q->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days'))))
             ->when(TicketStatus::tryFrom($this->status), fn ($q, $status) => $q->where('status', $status->value))
             ->when($this->assignee === 'mine', fn ($q) => $q->where('assigned_admin_id', auth('admin')->id()))
@@ -128,6 +145,12 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             @can(\App\Support\AdminPermissions::SUPPORT_SETTINGS)
                 <a href="{{ route('admin.support.settings') }}" wire:navigate class="inline-flex items-center rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">Grievance officer</a>
             @endcan
+            @if ($this->counts['unread'] > 0)
+                <button type="button" wire:click="$set('status', 'unread')" data-test="inbox-unread-count" class="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 shadow-2xs hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                    <span class="size-2 rounded-full bg-rose-500"></span>
+                    <span>Unread: {{ $this->counts['unread'] }}</span>
+                </button>
+            @endif
             <button type="button" wire:click="$set('status', 'open')" class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
                 <span class="size-2 rounded-full bg-amber-500"></span>
                 <span>Needs reply: {{ $this->counts['open'] }}</span>
@@ -152,6 +175,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
 
         <select wire:model.live="status" class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
             <option value="open">Needs reply ({{ $this->counts['open'] }})</option>
+            <option value="unread">Unread by me</option>
             <option value="pending">Awaiting requester ({{ $this->counts['pending'] }})</option>
             <option value="awaiting_seller">Waiting on seller ({{ $this->counts['awaiting_seller'] }})</option>
             <option value="resolved">Resolved ({{ $this->counts['resolved'] }})</option>
@@ -207,7 +231,12 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                         <tr wire:key="ticket-{{ $ticket->id }}" class="transition hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
                             <td class="max-w-sm px-4 py-3.5">
                                 <a href="{{ route('admin.support.show', ['ticket' => $ticket->ticket_number]) }}" wire:navigate class="group block">
-                                    <span class="line-clamp-1 font-medium text-zinc-900 group-hover:underline dark:text-white">{{ $ticket->subject }}</span>
+                                    <span class="flex items-center gap-1.5">
+                                        @if ($this->unreadIds->contains($ticket->id))
+                                            <span data-test="ticket-unread" class="size-2 shrink-0 rounded-full bg-rose-500" title="New since you last opened it"></span>
+                                        @endif
+                                        <span @class(['line-clamp-1 text-zinc-900 group-hover:underline dark:text-white', 'font-bold' => $this->unreadIds->contains($ticket->id), 'font-medium' => ! $this->unreadIds->contains($ticket->id)])>{{ $ticket->subject }}</span>
+                                    </span>
                                     <span class="text-[11px] text-zinc-400">
                                         {{ $ticket->ticket_number }} &middot; {{ $ticket->category->label() }}
                                         @if ($ticket->order_number) &middot; {{ $ticket->order_number }} @endif
