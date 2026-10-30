@@ -109,6 +109,9 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
+            @can(\App\Support\AdminPermissions::SUPPORT_SETTINGS)
+                <a href="{{ route('admin.support.settings') }}" wire:navigate class="inline-flex items-center rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">Grievance officer</a>
+            @endcan
             <button type="button" wire:click="$set('status', 'open')" class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
                 <span class="size-2 rounded-full bg-amber-500"></span>
                 <span>Needs reply: {{ $this->counts['open'] }}</span>

@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::livewire('/', 'pages::storefront.home-page')->name('home');
 Route::livewire('pages/{slug}', 'pages::storefront.static-page')->name('content.page');
+Route::livewire('grievance-officer', 'pages::storefront.grievance-officer')->name('grievance-officer');
 
 Route::livewire('products', 'pages::storefront.product-index')->name('products.index');
 Route::livewire('{slug}/p/{upid}', 'pages::storefront.product-show')->name('product.show');

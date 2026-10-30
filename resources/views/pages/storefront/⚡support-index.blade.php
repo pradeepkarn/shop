@@ -38,6 +38,7 @@ new #[Layout('layouts.app')] #[Title('Help & Support')] class extends Component 
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white sm:text-3xl">Help &amp; Support</h1>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Ask about an order, a refund, or anything else. Our team replies here and by email.</p>
+            <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Not happy with how a request was handled? Contact our <a href="{{ route('grievance-officer') }}" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Grievance Officer</a>.</p>
         </div>
         <a href="{{ route('support.create') }}" wire:navigate
            class="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-amber-600 transition">

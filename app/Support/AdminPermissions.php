@@ -90,6 +90,8 @@ class AdminPermissions
 
     public const SUPPORT_ASSIGN = 'support.assign';
 
+    public const SUPPORT_SETTINGS = 'support.settings';
+
     /**
      * Get all registered permissions grouped by module.
      *
@@ -305,6 +307,10 @@ class AdminPermissions
                 self::SUPPORT_ASSIGN => [
                     'label' => 'Assign Support Tickets',
                     'description' => 'Assign or reassign any ticket to any active staff member.',
+                ],
+                self::SUPPORT_SETTINGS => [
+                    'label' => 'Manage Grievance Officer',
+                    'description' => 'Edit the grievance officer details shown on the public grievance page.',
                 ],
             ],
         ];
