@@ -3,6 +3,7 @@
 use App\Enums\AttributeType;
 use App\Enums\BrandStatus;
 use App\Enums\ListingStatus;
+use App\Enums\NetQuantityUnit;
 use App\Enums\ProductImageStatus;
 use App\Enums\ProductQcStatus;
 use App\Enums\VariantQcStatus;
@@ -20,6 +21,7 @@ use App\Services\VariantOfferValidator;
 use App\Services\VariantSyncService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -60,6 +62,9 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
     public string $description = '';
     public array $highlights = [''];
     public array $specs = []; // Key-value map using attribute code and option value
+    public string $generic_name = '';
+    public string $net_quantity = '';
+    public string $net_quantity_unit = 'count';
 
     // Step 4: Variants & Images
     public array $selectedVariantOptions = []; // [code => [value1, value2]]
@@ -109,6 +114,9 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
         $this->description = $draft->description ?? '';
         $this->highlights = ! empty($draft->highlights) ? $draft->highlights : [''];
         $this->specs = $draft->specs ?? [];
+        $this->generic_name = $draft->generic_name ?? '';
+        $this->net_quantity = $draft->net_quantity !== null ? rtrim(rtrim((string) $draft->net_quantity, '0'), '.') : '';
+        $this->net_quantity_unit = $draft->net_quantity_unit->value ?? 'count';
 
         // Load variants if existing
         $variants = $draft->variants()->with('listings')->get();
@@ -150,6 +158,7 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
         $this->reset([
             'draftProductId', 'vertical_id', 'title', 'description',
             'highlights', 'specs', 'selectedVariantOptions', 'variantRows',
+            'generic_name', 'net_quantity', 'net_quantity_unit',
         ]);
         $this->highlights = [''];
         $this->currentStep = 1;
@@ -302,6 +311,9 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
         $this->validate([
             'title' => ['required', 'string', 'min:5', 'max:255'],
             'description' => ['required', 'string', 'min:10', 'max:3000'],
+            'generic_name' => ['required', 'string', 'min:2', 'max:120'],
+            'net_quantity' => ['required', 'numeric', 'gt:0', 'max:9999999'],
+            'net_quantity_unit' => ['required', Rule::enum(NetQuantityUnit::class)],
         ]);
 
         $this->highlights = array_values(array_filter($this->highlights, fn ($h) => trim($h) !== ''));
@@ -527,6 +539,9 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
             'description' => $this->description ?: '',
             'highlights' => array_values(array_filter($this->highlights, fn ($h) => trim($h) !== '')),
             'specs' => $this->specs,
+            'generic_name' => trim($this->generic_name) ?: null,
+            'net_quantity' => is_numeric($this->net_quantity) && (float) $this->net_quantity > 0 ? $this->net_quantity : null,
+            'net_quantity_unit' => NetQuantityUnit::tryFrom($this->net_quantity_unit),
             'created_by' => $seller->id,
             'qc_status' => ProductQcStatus::Draft,
         ];
@@ -577,6 +592,13 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
         // Validate complete product ready for QC
         if (strlen($draft->title) < 5 || strlen($draft->description) < 10) {
             session()->flash('qc_error', 'Title and description must be completed before submitting.');
+            $this->currentStep = 3;
+
+            return;
+        }
+
+        if ($missing = $draft->missingDeclarations()) {
+            session()->flash('qc_error', 'Add the product\'s '.implode(' and ', $missing).' before submitting.');
             $this->currentStep = 3;
 
             return;
@@ -942,6 +964,34 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
                             @error('description') <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p> @enderror
                         </div>
 
+                        <!-- Package declarations (Legal Metrology) -->
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div>
+                                <label for="prod-generic-name" class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Generic Name *</label>
+                                <input wire:model="generic_name" type="text" id="prod-generic-name" required maxlength="120" placeholder="e.g. Action figure"
+                                       class="mt-1 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-hidden focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                <p class="mt-1 text-xs text-zinc-400">Common name of the item, as on the pack.</p>
+                                @error('generic_name') <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label for="prod-net-qty" class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Net Quantity *</label>
+                                <input wire:model="net_quantity" type="number" step="any" min="0" id="prod-net-qty" required placeholder="e.g. 1"
+                                       class="mt-1 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-hidden focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                <p class="mt-1 text-xs text-zinc-400">What one unit contains, as on the pack.</p>
+                                @error('net_quantity') <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label for="prod-net-qty-unit" class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Unit *</label>
+                                <select wire:model="net_quantity_unit" id="prod-net-qty-unit" required
+                                        class="mt-1 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-hidden focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                                    @foreach (NetQuantityUnit::cases() as $unit)
+                                        <option value="{{ $unit->value }}">{{ $unit->label() }}</option>
+                                    @endforeach
+                                </select>
+                                @error('net_quantity_unit') <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p> @enderror
+                            </div>
+                        </div>
+
                         <!-- Highlights Bullet Points -->
                         <div>
                             <div class="flex items-center justify-between">
@@ -1258,6 +1308,19 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
                                 <div class="flex items-center gap-2">
                                     <span class="size-2 rounded-full {{ strlen($title) >= 5 ? 'bg-emerald-500' : 'bg-red-500' }}"></span>
                                     <span>Title: <strong>{{ $title ?: 'Missing' }}</strong></span>
+                                </div>
+                                <button type="button" wire:click="$set('currentStep', 3)" class="font-semibold text-emerald-600 hover:underline">Edit</button>
+                            </div>
+
+                            @php
+                                $netQuantityLabel = is_numeric($net_quantity) && (float) $net_quantity > 0
+                                    ? NetQuantityUnit::format($net_quantity, NetQuantityUnit::tryFrom($net_quantity_unit))
+                                    : null;
+                            @endphp
+                            <div class="flex items-center justify-between p-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="size-2 rounded-full {{ filled($generic_name) && $netQuantityLabel ? 'bg-emerald-500' : 'bg-red-500' }}"></span>
+                                    <span>Generic name: <strong>{{ $generic_name ?: 'Missing' }}</strong> &bull; Net quantity: <strong>{{ $netQuantityLabel ?? 'Missing' }}</strong></span>
                                 </div>
                                 <button type="button" wire:click="$set('currentStep', 3)" class="font-semibold text-emerald-600 hover:underline">Edit</button>
                             </div>
