@@ -113,6 +113,15 @@ new #[Layout('layouts.seller')] #[Title('Support Request')] class extends Compon
                 {{ $this->ticket->status->requesterLabel() }}
             </span>
         </div>
+        @if ($this->ticket->reply_due_at && $this->ticket->status === TicketStatus::Pending)
+            <p data-test="seller-reply-due" @class([
+                'mt-3 rounded-lg px-3 py-2 text-xs font-semibold',
+                'bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300' => $this->ticket->reply_due_at->isPast(),
+                'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300' => ! $this->ticket->reply_due_at->isPast(),
+            ])>
+                {{ $this->ticket->reply_due_at->isPast() ? 'Your reply is overdue. It was due' : 'Please reply by' }} @datetime($this->ticket->reply_due_at)
+            </p>
+        @endif
     </div>
 
     <x-support.thread :ticket="$this->ticket" :messages="$this->messages" viewer="requester" />

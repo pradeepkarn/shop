@@ -65,6 +65,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         return [
             'open' => (int) ($byStatus[TicketStatus::Open->value] ?? 0),
             'pending' => (int) ($byStatus[TicketStatus::Pending->value] ?? 0),
+            'awaiting_seller' => (int) ($byStatus[TicketStatus::AwaitingSeller->value] ?? 0),
             'resolved' => (int) ($byStatus[TicketStatus::Resolved->value] ?? 0),
             'unassigned' => SupportTicket::query()->where('status', TicketStatus::Open->value)->whereNull('assigned_admin_id')->count(),
             'mine' => SupportTicket::query()->notClosed()->where('assigned_admin_id', auth('admin')->id())->count(),
@@ -77,7 +78,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         $this->authorize('viewAny', SupportTicket::class);
 
         return SupportTicket::query()
-            ->with('assignee')
+            ->with(['assignee', 'linkedTicket'])
             ->when($this->status === 'active', fn ($q) => $q->notClosed())
             ->when(TicketStatus::tryFrom($this->status), fn ($q, $status) => $q->where('status', $status->value))
             ->when($this->assignee === 'mine', fn ($q) => $q->where('assigned_admin_id', auth('admin')->id()))
@@ -137,6 +138,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         <select wire:model.live="status" class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
             <option value="open">Needs reply ({{ $this->counts['open'] }})</option>
             <option value="pending">Awaiting requester ({{ $this->counts['pending'] }})</option>
+            <option value="awaiting_seller">Waiting on seller ({{ $this->counts['awaiting_seller'] }})</option>
             <option value="resolved">Resolved ({{ $this->counts['resolved'] }})</option>
             <option value="closed">Closed</option>
             <option value="active">All active</option>
@@ -206,6 +208,12 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                             </td>
                             <td class="whitespace-nowrap px-4 py-3.5">
                                 <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 {{ $ticket->status->badgeClasses() }}">{{ $ticket->status->label() }}</span>
+                                @if ($ticket->attention === 'seller_replied')
+                                    <span class="ml-1 inline-flex items-center rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-semibold text-white">Seller replied</span>
+                                @endif
+                                @if ($ticket->isSellerOverdue() || ($ticket->linkedTicket && $ticket->status === TicketStatus::AwaitingSeller && $ticket->linkedTicket->isSellerOverdue()))
+                                    <span class="ml-1 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold text-white">Seller overdue</span>
+                                @endif
                             </td>
                             <td class="whitespace-nowrap px-4 py-3.5 text-xs font-semibold {{ $ticket->priority->badgeClasses() }}">{{ $ticket->priority->label() }}</td>
                             <td class="whitespace-nowrap px-4 py-3.5 text-xs">

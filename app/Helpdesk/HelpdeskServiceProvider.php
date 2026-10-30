@@ -3,6 +3,7 @@
 namespace App\Helpdesk;
 
 use App\Helpdesk\Console\CloseResolvedTicketsCommand;
+use App\Helpdesk\Console\RemindSellersCommand;
 use App\Helpdesk\Models\SupportTicket;
 use App\Helpdesk\Policies\SupportTicketPolicy;
 use App\Helpdesk\Services\GrievanceOfficerService;
@@ -25,7 +26,7 @@ class HelpdeskServiceProvider extends ServiceProvider
         Gate::policy(SupportTicket::class, SupportTicketPolicy::class);
 
         if ($this->app->runningInConsole()) {
-            $this->commands([CloseResolvedTicketsCommand::class]);
+            $this->commands([CloseResolvedTicketsCommand::class, RemindSellersCommand::class]);
         }
     }
 }

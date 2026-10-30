@@ -10,6 +10,9 @@ enum TicketStatus: string
     /** Staff replied; waiting on the requester (customer or seller). */
     case Pending = 'pending';
 
+    /** Customer ticket parked while staff wait on the linked seller ticket; not counted as needing a reply. */
+    case AwaitingSeller = 'awaiting_seller';
+
     /** Staff thinks it is done; a requester reply reopens it until it auto-closes. */
     case Resolved = 'resolved';
 
@@ -21,6 +24,7 @@ enum TicketStatus: string
         return match ($this) {
             self::Open => 'Open',
             self::Pending => 'Awaiting requester',
+            self::AwaitingSeller => 'Waiting on seller',
             self::Resolved => 'Resolved',
             self::Closed => 'Closed',
         };
@@ -34,6 +38,7 @@ enum TicketStatus: string
         return match ($this) {
             self::Open => 'Waiting for support',
             self::Pending => 'Waiting for your reply',
+            self::AwaitingSeller => 'We are checking with the seller',
             self::Resolved => 'Resolved',
             self::Closed => 'Closed',
         };
@@ -47,6 +52,7 @@ enum TicketStatus: string
         return match ($this) {
             self::Open => 'bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/20',
             self::Pending => 'bg-sky-50 text-sky-800 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/20',
+            self::AwaitingSeller => 'bg-violet-50 text-violet-800 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-500/20',
             self::Resolved => 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20',
             self::Closed => 'bg-zinc-100 text-zinc-600 ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-600/30',
         };

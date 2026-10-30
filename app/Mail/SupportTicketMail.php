@@ -12,7 +12,7 @@ use Illuminate\Queue\SerializesModels;
 
 /**
  * Support ticket updates for the requester.
- * Events: received, staff_reply, resolved.
+ * Events: received, staff_reply, resolved; for sellers also seller_action (support needs their reply) and seller_reminder.
  */
 class SupportTicketMail extends Mailable implements ShouldQueue
 {
@@ -22,6 +22,8 @@ class SupportTicketMail extends Mailable implements ShouldQueue
         'received' => 'We have your request',
         'staff_reply' => 'New reply on your request',
         'resolved' => 'Your request is resolved',
+        'seller_action' => 'Support needs your reply',
+        'seller_reminder' => 'Reminder: support is waiting for your reply',
     ];
 
     public function __construct(
@@ -45,6 +47,8 @@ class SupportTicketMail extends Mailable implements ShouldQueue
                 'subjectLine' => $this->ticket->subject,
                 'url' => $this->ticket->requesterUrl(),
                 'autoCloseDays' => (int) config('helpdesk.auto_close_resolved_days'),
+                'orderNumber' => $this->ticket->order_number,
+                'due' => $this->ticket->reply_due_at ? format_datetime($this->ticket->reply_due_at) : null,
             ],
         );
     }

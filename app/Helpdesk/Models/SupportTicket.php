@@ -32,8 +32,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $order_id
  * @property string|null $order_number
  * @property string|null $seller_order_id
+ * @property string|null $linked_ticket_id
+ * @property string|null $attention
  * @property int|null $assigned_admin_id
  * @property CarbonInterface|null $last_message_at
+ * @property CarbonInterface|null $reply_due_at
+ * @property CarbonInterface|null $reminded_at
  * @property CarbonInterface|null $first_response_at
  * @property CarbonInterface|null $resolved_at
  * @property CarbonInterface|null $closed_at
@@ -42,6 +46,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property-read User|null $user
  * @property-read SellerProfile|null $sellerProfile
  * @property-read Admin|null $assignee
+ * @property-read SupportTicket|null $linkedTicket
  * @property-read Collection<int, SupportTicketMessage> $messages
  */
 class SupportTicket extends Model
@@ -63,6 +68,8 @@ class SupportTicket extends Model
             'status' => TicketStatus::class,
             'priority' => TicketPriority::class,
             'last_message_at' => 'datetime',
+            'reply_due_at' => 'datetime',
+            'reminded_at' => 'datetime',
             'first_response_at' => 'datetime',
             'resolved_at' => 'datetime',
             'closed_at' => 'datetime',
@@ -91,6 +98,27 @@ class SupportTicket extends Model
     public function assignee(): BelongsTo
     {
         return $this->belongsTo(Admin::class, 'assigned_admin_id');
+    }
+
+    /**
+     * The other side of a customer/seller pair.
+     *
+     * @return BelongsTo<SupportTicket, $this>
+     */
+    public function linkedTicket(): BelongsTo
+    {
+        return $this->belongsTo(SupportTicket::class, 'linked_ticket_id');
+    }
+
+    /**
+     * A seller ticket whose reply deadline has passed while waiting on the seller.
+     */
+    public function isSellerOverdue(): bool
+    {
+        return $this->requester_type === RequesterType::Seller
+            && $this->status === TicketStatus::Pending
+            && $this->reply_due_at !== null
+            && $this->reply_due_at->isPast();
     }
 
     /**

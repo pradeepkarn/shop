@@ -13,6 +13,7 @@ use App\Helpdesk\Models\SupportTicket;
 use App\Helpdesk\Models\SupportTicketMessage;
 use App\Mail\SupportTicketMail;
 use App\Models\Admin;
+use App\Models\SellerProfile;
 use App\Models\User;
 use App\Services\AdminActivityLogger;
 use DomainException;
@@ -34,6 +35,8 @@ class HelpdeskService
     public function __construct(
         protected CustomerOrderLookupInterface $orders,
         protected SellerOrderLookupInterface $sellerOrders,
+        protected AnonymityGuard $guard,
+        protected AttachmentSanitizer $sanitizer,
     ) {}
 
     /**
@@ -213,12 +216,18 @@ class HelpdeskService
                     'attachments' => $stored ?: null,
                 ]);
 
-                // Any requester reply puts the ticket back with staff
+                // Any requester reply puts the ticket back with staff; a seller's reply also meets their deadline
                 $locked->update([
                     'status' => TicketStatus::Open,
                     'resolved_at' => null,
                     'last_message_at' => now(),
+                    'reply_due_at' => null,
+                    'reminded_at' => null,
                 ]);
+
+                if ($locked->requester_type === RequesterType::Seller && $locked->linked_ticket_id) {
+                    $this->flagSellerReply($locked);
+                }
 
                 return $message;
             });
@@ -269,36 +278,10 @@ class HelpdeskService
             $message = DB::transaction(function () use ($ticket, $admin, $body, $stored, $internal, $statusAfter) {
                 $locked = SupportTicket::query()->lockForUpdate()->findOrFail($ticket->id);
                 if (! $internal && ! $locked->status->acceptsReplies()) {
-                    throw new DomainException('This ticket is closed. Reopen it before replying to the customer.');
+                    throw new DomainException('This ticket is closed. Reopen it before replying.');
                 }
 
-                $message = $locked->messages()->create([
-                    'author_type' => MessageAuthor::Staff,
-                    'admin_id' => $admin->id,
-                    'body' => $body,
-                    'is_internal' => $internal,
-                    'attachments' => $stored ?: null,
-                ]);
-
-                if (! $internal) {
-                    $changes = ['last_message_at' => now()];
-                    if ($locked->first_response_at === null) {
-                        $changes['first_response_at'] = now();
-                    }
-                    if ($locked->assigned_admin_id === null) {
-                        $changes['assigned_admin_id'] = $admin->id;
-                    }
-                    $locked->fill($changes);
-                    $this->applyStatus($locked, $statusAfter ?? TicketStatus::Pending);
-                }
-
-                AdminActivityLogger::log($internal ? 'support.note_added' : 'support.replied', $locked, [
-                    'ticket_number' => $locked->ticket_number,
-                    'message_id' => $message->id,
-                    'status' => $locked->status->value,
-                ], $admin);
-
-                return $message;
+                return $this->recordStaffMessage($locked, $admin, $body, $stored, $internal, $statusAfter);
             });
         } catch (Throwable $e) {
             $this->deleteStored($stored);
@@ -307,10 +290,297 @@ class HelpdeskService
         }
 
         if (! $internal) {
-            $this->notifyRequester($ticket->refresh(), 'staff_reply');
+            $ticket->refresh();
+            $this->notifyRequester($ticket, $ticket->requester_type === RequesterType::Seller ? 'seller_action' : 'staff_reply');
         }
 
         return $message;
+    }
+
+    /**
+     * Opens a seller ticket for one package of a customer ticket's order and links the two.
+     * The seller sees only the marketplace: the text must not identify the customer, and only ticked attachments,
+     * cleaned of metadata, are passed on.
+     *
+     * @param  list<string>  $attachmentRefs  "messageId:index" of the customer's attachments to pass on
+     */
+    public function askSeller(
+        SupportTicket $customerTicket,
+        Admin $admin,
+        string $sellerOrderId,
+        TicketCategory $category,
+        string $subject,
+        string $body,
+        array $attachmentRefs = [],
+    ): SupportTicket {
+        if ($customerTicket->requester_type !== RequesterType::Customer || ! $customerTicket->order_id) {
+            throw new DomainException('Only a customer ticket about an order can be passed to its seller.');
+        }
+        if ($customerTicket->linkedTicket && $customerTicket->linkedTicket->status !== TicketStatus::Closed) {
+            throw new DomainException('This ticket is already linked to seller ticket '.$customerTicket->linkedTicket->ticket_number.'. Forward messages there instead.');
+        }
+        if (! $customerTicket->status->acceptsReplies()) {
+            throw new DomainException('This ticket is closed. Reopen it first.');
+        }
+        if (! in_array($category, TicketCategory::forSellers(), true)) {
+            throw new DomainException('Choose one of the seller topics.');
+        }
+
+        $sellerOrder = collect($this->sellerOrders->forOrder($customerTicket->order_id))->firstWhere('sellerOrderId', $sellerOrderId);
+        $profile = $sellerOrder?->sellerProfileId ? SellerProfile::query()->with('user')->find($sellerOrder->sellerProfileId) : null;
+        if (! $sellerOrder || ! $profile) {
+            throw new DomainException('Choose one of the sellers in this order.');
+        }
+
+        $subject = trim($subject);
+        $body = $this->validateReply($body);
+        Validator::make(['subject' => $subject], [
+            'subject' => ['required', 'string', 'min:'.config('helpdesk.subject_min'), 'max:'.config('helpdesk.subject_max')],
+        ])->validate();
+
+        $customerIds = AnonymityGuard::customerIdentifiers($customerTicket->requester_name, $customerTicket->requester_email, $customerTicket->ticket_number);
+        $this->guard->assertClean($subject."\n".$body, $customerIds);
+
+        $sellerTicketId = (string) Str::ulid();
+        $stored = $this->copyAttachments($customerTicket, $attachmentRefs, $sellerTicketId);
+
+        try {
+            $sellerTicket = DB::transaction(function () use ($customerTicket, $admin, $sellerTicketId, $profile, $sellerOrder, $category, $subject, $body, $stored) {
+                $sellerTicket = SupportTicket::create([
+                    'id' => $sellerTicketId,
+                    'ticket_number' => $this->newTicketNumber(),
+                    'requester_type' => RequesterType::Seller,
+                    'user_id' => $profile->user->id,
+                    'seller_profile_id' => $profile->id,
+                    'requester_name' => $profile->store_name,
+                    'requester_email' => $profile->user->email,
+                    'category' => $category,
+                    'subject' => $subject,
+                    'status' => TicketStatus::Pending,
+                    'priority' => $customerTicket->priority,
+                    'order_id' => $sellerOrder->orderId,
+                    'order_number' => $sellerOrder->orderNumber,
+                    'seller_order_id' => $sellerOrder->sellerOrderId,
+                    'linked_ticket_id' => $customerTicket->id,
+                    'assigned_admin_id' => $admin->id,
+                    'last_message_at' => now(),
+                    'first_response_at' => now(),
+                    'reply_due_at' => now()->addHours((int) config('helpdesk.seller_reply_hours')),
+                ]);
+
+                $sellerTicket->messages()->create([
+                    'author_type' => MessageAuthor::Staff,
+                    'admin_id' => $admin->id,
+                    'body' => $body,
+                    'attachments' => $stored ?: null,
+                ]);
+
+                $locked = SupportTicket::query()->lockForUpdate()->findOrFail($customerTicket->id);
+                $locked->fill(['linked_ticket_id' => $sellerTicket->id, 'attention' => null]);
+                $this->applyStatus($locked, TicketStatus::AwaitingSeller);
+
+                $this->systemNote($locked, "Asked the seller ({$profile->store_name}) on {$sellerTicket->ticket_number}.", internal: true);
+                $this->systemNote($sellerTicket, "Opened by {$admin->name} for customer ticket {$customerTicket->ticket_number}.", internal: true);
+
+                AdminActivityLogger::log('support.asked_seller', $locked, [
+                    'ticket_number' => $locked->ticket_number,
+                    'seller_ticket_number' => $sellerTicket->ticket_number,
+                    'seller_profile_id' => $profile->id,
+                    'attachments' => count($stored),
+                ], $admin);
+
+                return $sellerTicket;
+            });
+        } catch (Throwable $e) {
+            $this->deleteStored($stored);
+
+            throw $e;
+        }
+
+        $this->notifyRequester($sellerTicket, 'seller_action');
+        $customerTicket->refresh();
+
+        return $sellerTicket;
+    }
+
+    /**
+     * Passes a customer's or seller's message to the linked ticket as a staff message, after staff have edited it.
+     * The text must not identify the sender; only ticked attachments, cleaned of metadata, go across.
+     *
+     * @param  list<int>  $attachmentIndexes  indexes into the message's attachments
+     */
+    public function forward(
+        SupportTicketMessage $message,
+        Admin $admin,
+        string $body,
+        array $attachmentIndexes = [],
+        ?TicketStatus $statusAfter = null,
+    ): SupportTicketMessage {
+        $source = $message->ticket;
+        $target = $source->linkedTicket;
+        if ($message->is_internal || $message->author_type !== MessageAuthor::Requester) {
+            throw new DomainException('Only customer and seller messages can be forwarded.');
+        }
+        if (! $target || ! $target->status->acceptsReplies()) {
+            throw new DomainException('There is no open linked ticket to forward to.');
+        }
+
+        $body = $this->validateReply($body);
+        $identifiers = $source->requester_type === RequesterType::Customer
+            ? AnonymityGuard::customerIdentifiers($source->requester_name, $source->requester_email, $source->ticket_number)
+            : AnonymityGuard::sellerIdentifiers($source->requester_name, $source->sellerProfile?->legal_name, $source->requester_email, $source->ticket_number);
+        $this->guard->assertClean($body, $identifiers);
+
+        $refs = array_map(fn (int $index) => $message->id.':'.$index, array_values(array_unique($attachmentIndexes)));
+        $stored = $this->copyAttachments($source, $refs, $target->id);
+
+        // Forwarding to the seller parks the customer's ticket; forwarding to the customer waits on them
+        $toSeller = $target->requester_type === RequesterType::Seller;
+
+        try {
+            $forwarded = DB::transaction(function () use ($source, $target, $admin, $body, $stored, $statusAfter, $toSeller) {
+                $lockedTarget = SupportTicket::query()->lockForUpdate()->findOrFail($target->id);
+                $forwarded = $this->recordStaffMessage($lockedTarget, $admin, $body, $stored, false, $toSeller ? TicketStatus::Pending : $statusAfter);
+
+                $lockedSource = SupportTicket::query()->lockForUpdate()->findOrFail($source->id);
+                if ($toSeller && $lockedSource->status->acceptsReplies()) {
+                    $lockedSource->attention = null;
+                    $this->applyStatus($lockedSource, TicketStatus::AwaitingSeller);
+                }
+                $this->systemNote($lockedSource, "Forwarded to {$lockedTarget->ticket_number} by {$admin->name}.", internal: true);
+
+                return $forwarded;
+            });
+        } catch (Throwable $e) {
+            $this->deleteStored($stored);
+
+            throw $e;
+        }
+
+        $target->refresh();
+        $this->notifyRequester($target, $toSeller ? 'seller_action' : 'staff_reply');
+
+        return $forwarded;
+    }
+
+    /**
+     * Emails one reminder to sellers whose reply is due within the reminder window.
+     */
+    public function remindSellers(): int
+    {
+        $reminded = 0;
+
+        SupportTicket::query()
+            ->where('requester_type', RequesterType::Seller->value)
+            ->where('status', TicketStatus::Pending->value)
+            ->whereNull('reminded_at')
+            ->whereNotNull('reply_due_at')
+            ->where('reply_due_at', '>', now())
+            ->where('reply_due_at', '<=', now()->addHours((int) config('helpdesk.seller_reminder_hours_left')))
+            ->orderBy('id')
+            ->each(function (SupportTicket $ticket) use (&$reminded) {
+                $ticket->update(['reminded_at' => now()]);
+                $this->notifyRequester($ticket, 'seller_reminder');
+                $reminded++;
+            });
+
+        return $reminded;
+    }
+
+    /**
+     * A seller replied on a linked ticket: bring the customer's ticket back to staff and mark it.
+     */
+    protected function flagSellerReply(SupportTicket $sellerTicket): void
+    {
+        $customerTicket = SupportTicket::query()->lockForUpdate()->find($sellerTicket->linked_ticket_id);
+        if (! $customerTicket || ! $customerTicket->status->acceptsReplies()) {
+            return;
+        }
+
+        $customerTicket->attention = 'seller_replied';
+        if ($customerTicket->status === TicketStatus::AwaitingSeller) {
+            $this->applyStatus($customerTicket, TicketStatus::Open);
+        } else {
+            $customerTicket->save();
+        }
+
+        $this->systemNote($customerTicket, "The seller replied on {$sellerTicket->ticket_number}.", internal: true);
+    }
+
+    /**
+     * @param  list<array{path: string, name: string, mime: string, size: int}>  $stored
+     */
+    protected function recordStaffMessage(SupportTicket $locked, Admin $admin, string $body, array $stored, bool $internal, ?TicketStatus $statusAfter): SupportTicketMessage
+    {
+        $message = $locked->messages()->create([
+            'author_type' => MessageAuthor::Staff,
+            'admin_id' => $admin->id,
+            'body' => $body,
+            'is_internal' => $internal,
+            'attachments' => $stored ?: null,
+        ]);
+
+        if (! $internal) {
+            $changes = ['last_message_at' => now(), 'attention' => null];
+            if ($locked->first_response_at === null) {
+                $changes['first_response_at'] = now();
+            }
+            if ($locked->assigned_admin_id === null) {
+                $changes['assigned_admin_id'] = $admin->id;
+            }
+            $locked->fill($changes);
+            $this->applyStatus($locked, $statusAfter ?? TicketStatus::Pending);
+
+            // Each staff message to a seller (re)starts their reply deadline
+            if ($locked->requester_type === RequesterType::Seller && $locked->status === TicketStatus::Pending) {
+                $locked->update([
+                    'reply_due_at' => now()->addHours((int) config('helpdesk.seller_reply_hours')),
+                    'reminded_at' => null,
+                ]);
+            }
+        }
+
+        AdminActivityLogger::log($internal ? 'support.note_added' : 'support.replied', $locked, [
+            'ticket_number' => $locked->ticket_number,
+            'message_id' => $message->id,
+            'status' => $locked->status->value,
+        ], $admin);
+
+        return $message;
+    }
+
+    /**
+     * Copies ticked attachments ("messageId:index") from the ticket's own requester messages, cleaned of metadata.
+     *
+     * @param  list<string>  $refs
+     * @return list<array{path: string, name: string, mime: string, size: int}>
+     */
+    protected function copyAttachments(SupportTicket $source, array $refs, string $targetTicketId): array
+    {
+        $stored = [];
+
+        try {
+            foreach (array_values(array_unique($refs)) as $position => $ref) {
+                [$messageId, $index] = array_map('intval', explode(':', $ref) + [1 => -1]);
+                $message = $source->messages()
+                    ->whereKey($messageId)
+                    ->where('author_type', MessageAuthor::Requester->value)
+                    ->where('is_internal', false)
+                    ->first();
+                $file = $message ? ($message->attachments ?? [])[$index] ?? null : null;
+                if (! is_array($file)) {
+                    throw new DomainException('One of the ticked attachments could not be found.');
+                }
+
+                $stored[] = $this->sanitizer->copy($file, $targetTicketId, $position + 1);
+            }
+        } catch (Throwable $e) {
+            $this->deleteStored($stored);
+
+            throw $e;
+        }
+
+        return $stored;
     }
 
     public function setStatus(SupportTicket $ticket, Admin $admin, TicketStatus $status): SupportTicket
@@ -319,15 +589,19 @@ class HelpdeskService
         if ($previous === $status) {
             return $ticket;
         }
+        if ($status === TicketStatus::AwaitingSeller && ($ticket->requester_type !== RequesterType::Customer || ! $ticket->linked_ticket_id)) {
+            throw new DomainException('Only a customer ticket linked to a seller ticket can wait on the seller.');
+        }
 
         DB::transaction(function () use ($ticket, $admin, $status, $previous) {
+            $ticket->attention = null;
             $this->applyStatus($ticket, $status);
 
             $note = match ($status) {
                 TicketStatus::Resolved => 'Marked as resolved by support.',
                 TicketStatus::Closed => 'Closed by support.',
                 TicketStatus::Open => $previous === TicketStatus::Closed ? 'Reopened by support.' : null,
-                TicketStatus::Pending => null,
+                TicketStatus::Pending, TicketStatus::AwaitingSeller => null,
             };
             if ($note) {
                 $this->systemNote($ticket, $note, internal: false);
@@ -432,6 +706,11 @@ class HelpdeskService
         $ticket->status = $status;
         $ticket->resolved_at = $status === TicketStatus::Resolved ? now() : ($status === TicketStatus::Closed ? $ticket->resolved_at : null);
         $ticket->closed_at = $status === TicketStatus::Closed ? now() : null;
+        // A seller deadline only runs while the seller is the one being waited on
+        if ($status !== TicketStatus::Pending) {
+            $ticket->reply_due_at = null;
+            $ticket->reminded_at = null;
+        }
         $ticket->save();
     }
 

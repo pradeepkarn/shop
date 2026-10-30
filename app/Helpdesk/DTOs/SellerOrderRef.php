@@ -9,6 +9,7 @@ final readonly class SellerOrderRef
 {
     public function __construct(
         public string $sellerOrderId,
+        public ?int $sellerProfileId,
         public string $orderId,
         public string $orderNumber,
         public string $placedAt,
