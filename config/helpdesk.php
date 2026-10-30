@@ -55,6 +55,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Auto-resolve
+    |--------------------------------------------------------------------------
+    |
+    | Tickets waiting on the customer (or a seller's own ticket waiting on the
+    | seller) with no reply for this many days are resolved by the
+    | helpdesk:resolve-unanswered command. They can still reopen it until it
+    | auto-closes.
+    |
+    */
+    'pending_auto_resolve_days' => 7,
+
+    /*
+    |--------------------------------------------------------------------------
     | Seller Replies
     |--------------------------------------------------------------------------
     |

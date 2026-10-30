@@ -201,6 +201,22 @@ class SupportTicket extends Model
     }
 
     /**
+     * When a resolved ticket closes by itself if nobody reopens it.
+     */
+    public function autoClosesAt(): ?CarbonInterface
+    {
+        if ($this->status !== TicketStatus::Resolved) {
+            return null;
+        }
+
+        $from = $this->resolved_at && $this->last_message_at
+            ? ($this->resolved_at->greaterThan($this->last_message_at) ? $this->resolved_at : $this->last_message_at)
+            : ($this->resolved_at ?? $this->last_message_at);
+
+        return $from?->copy()->addDays((int) config('helpdesk.auto_close_resolved_days'));
+    }
+
+    /**
      * "overdue" past helpdesk.resolve_within_days, "warning" from helpdesk.warn_after_days, else null.
      */
     public function resolutionDeadlineState(): ?string

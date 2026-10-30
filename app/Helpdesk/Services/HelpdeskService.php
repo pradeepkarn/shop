@@ -191,9 +191,12 @@ class HelpdeskService
     }
 
     /**
+     * A customer or seller reply. On a resolved ticket it must be an explicit reopen ("No, I still need help"),
+     * so a "thanks" does not put a settled ticket back in the inbox.
+     *
      * @param  array<int, UploadedFile>  $attachments
      */
-    public function replyAsRequester(SupportTicket $ticket, User $user, string $body, array $attachments = []): SupportTicketMessage
+    public function replyAsRequester(SupportTicket $ticket, User $user, string $body, array $attachments = [], bool $reopen = false): SupportTicketMessage
     {
         if (! $ticket->isOwnedBy((int) $user->id)) {
             throw new DomainException('Request not found.');
@@ -204,10 +207,16 @@ class HelpdeskService
         $stored = $this->storeAttachments($ticket->id, $attachments);
 
         try {
-            return DB::transaction(function () use ($ticket, $user, $body, $stored) {
+            return DB::transaction(function () use ($ticket, $user, $body, $stored, $reopen) {
                 $locked = SupportTicket::query()->lockForUpdate()->findOrFail($ticket->id);
                 if (! $locked->status->acceptsReplies()) {
                     throw new DomainException('This request is closed. Please open a new one.');
+                }
+                if ($locked->status === TicketStatus::Resolved) {
+                    if (! $reopen) {
+                        throw new DomainException('This request is resolved. Choose "No, I still need help" to reopen it.');
+                    }
+                    $this->systemNote($locked, 'Reopened by the '.$locked->requester_type->value.'.', internal: false);
                 }
 
                 $message = $locked->messages()->create([
@@ -252,11 +261,47 @@ class HelpdeskService
                 return $locked;
             }
 
+            $confirmed = $locked->status === TicketStatus::Resolved;
             $this->applyStatus($locked, TicketStatus::Closed);
-            $this->systemNote($locked, 'Closed by the customer.', internal: false);
+            $this->systemNote($locked, $confirmed
+                ? 'The '.$locked->requester_type->value.' confirmed it is solved.'
+                : 'Closed by the '.$locked->requester_type->value.'.', internal: false);
+
+            if ($locked->requester_type === RequesterType::Customer) {
+                // The customer is done, so the seller side of the case is too
+                $this->closeSellerSide($locked);
+            } elseif ($locked->linked_ticket_id) {
+                // The seller stepped away from a case: staff need to see it
+                $customerTicket = SupportTicket::query()->lockForUpdate()->find($locked->linked_ticket_id);
+                if ($customerTicket && $customerTicket->status->acceptsReplies()) {
+                    $customerTicket->forceFill(['requester_activity_at' => now()])->save();
+                    $this->systemNote($customerTicket, "The seller closed {$locked->ticket_number}.", internal: true);
+                }
+            }
 
             return $locked;
         });
+    }
+
+    /**
+     * Closes the seller side of a customer's case once the case is settled. The seller cannot reopen it;
+     * if staff need the seller again they ask afresh.
+     */
+    protected function closeSellerSide(SupportTicket $customerTicket): void
+    {
+        if (! $customerTicket->linked_ticket_id) {
+            return;
+        }
+
+        $sellerTicket = SupportTicket::query()->lockForUpdate()->find($customerTicket->linked_ticket_id);
+        if (! $sellerTicket || $sellerTicket->status === TicketStatus::Closed) {
+            return;
+        }
+
+        $sellerTicket->requester_unread = true;
+        $sellerTicket->attention = null;
+        $this->applyStatus($sellerTicket, TicketStatus::Closed);
+        $this->systemNote($sellerTicket, 'Closed by support. Thank you for your help.', internal: false);
     }
 
     /**
@@ -654,33 +699,50 @@ class HelpdeskService
             throw new DomainException('Only a seller ticket can be marked answered.');
         }
 
-        // Resolving or closing a case's customer ticket settles the seller side with it
-        $cascade = null;
-        if (in_array($status, [TicketStatus::Resolved, TicketStatus::Closed], true)
-            && $ticket->requester_type === RequesterType::Customer
-            && $ticket->linked_ticket_id) {
-            $linked = SupportTicket::query()->find($ticket->linked_ticket_id);
-            if ($linked && $linked->status->acceptsReplies() && $linked->status !== $status) {
-                $cascade = $linked;
-            }
-        }
-
-        DB::transaction(function () use ($ticket, $admin, $status, $previous, $cascade) {
+        DB::transaction(function () use ($ticket, $admin, $status, $previous) {
             $this->changeStatus($ticket, $admin, $status, $previous);
 
-            if ($cascade) {
-                $this->changeStatus($cascade, $admin, $status, $cascade->status);
+            // Resolving or closing the customer's case closes its seller side: the seller has nothing left to do
+            if (in_array($status, [TicketStatus::Resolved, TicketStatus::Closed], true) && $ticket->requester_type === RequesterType::Customer) {
+                $this->closeSellerSide($ticket);
             }
         });
 
         if ($status === TicketStatus::Resolved) {
             $this->notifyRequester($ticket, 'resolved');
-            if ($cascade) {
-                $this->notifyRequester($cascade, 'resolved');
-            }
         }
 
         return $ticket;
+    }
+
+    /**
+     * Resolves tickets that have waited on the customer (or a seller's own ticket on the seller) with no reply for the
+     * configured days. They can still reopen it until it auto-closes. Seller sides of cases are left to their deadline.
+     */
+    public function resolveUnanswered(?int $days = null): int
+    {
+        $days ??= (int) config('helpdesk.pending_auto_resolve_days');
+        $resolved = 0;
+
+        SupportTicket::query()
+            ->caseRows()
+            ->where('status', TicketStatus::Pending->value)
+            ->where('last_message_at', '<=', now()->subDays($days))
+            ->orderBy('id')
+            ->each(function (SupportTicket $ticket) use ($days, &$resolved) {
+                DB::transaction(function () use ($ticket, $days) {
+                    $ticket->requester_unread = true;
+                    $this->applyStatus($ticket, TicketStatus::Resolved);
+                    $this->systemNote($ticket, "Resolved because we did not hear back for {$days} days. If you still need help, reopen it within ".config('helpdesk.auto_close_resolved_days').' days.', internal: false);
+                    if ($ticket->requester_type === RequesterType::Customer) {
+                        $this->closeSellerSide($ticket);
+                    }
+                });
+                $this->notifyRequester($ticket, 'resolved');
+                $resolved++;
+            });
+
+        return $resolved;
     }
 
     protected function changeStatus(SupportTicket $ticket, Admin $admin, TicketStatus $status, TicketStatus $previous): void

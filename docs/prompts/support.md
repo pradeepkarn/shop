@@ -146,6 +146,20 @@ A customer ticket and the seller ticket staff opened from it stay two tickets in
 - **Customers and sellers:** `support_tickets.requester_unread` is set by anything support posts that they can see (public staff replies, forwarded messages, a new seller ticket from "Ask the seller", resolved/closed/reopened notes) and cleared when they open the ticket. Internal notes never set it. Badge on "Help & Support" (customer sidebar) and "Support" (seller sidebar); "New reply" on list rows. Customer and seller counts are separate for a user who is both.
 - **Staff, per person:** `support_ticket_reads` records when each staff member last opened a ticket; `support_tickets.requester_activity_at` is the last time the customer wrote (or, for a case, the seller on the linked ticket). Unread = activity after my last read. Opening a case on either tab reads both sides. Admin sidebar "Support" badge counts open cases that are unread by me and assigned to me or unassigned; the inbox marks unread rows, shows "Unread: N" and has an "Unread by me" filter.
 
+## Resolving and closing
+
+| Step | What happens |
+|---|---|
+| Staff resolve (status, or reply with "then Resolved") | Customer gets the "resolved" email and a choice on the ticket page: **Yes, it is solved** (closes it) or **No, I still need help** (reopens it; a message saying what is still wrong is required). A plain reply is not accepted on a resolved ticket, so a "thanks" never reopens it. |
+| Nobody answers a resolved ticket | `helpdesk:close-resolved` closes it 7 days after it was resolved. The page shows the date. |
+| Ticket waits on the customer (or on a seller's own ticket) with no reply | `helpdesk:resolve-unanswered` resolves it after 7 days (`helpdesk.pending_auto_resolve_days`), with a note and the resolved email; it can still be reopened until it auto-closes. Seller sides of cases are excluded; their 48-hour deadline applies instead. |
+| Customer closes ("My issue is sorted" or "Yes, it is solved") | Ticket closes. If it is a case, the seller side closes too. |
+| Seller closes their side of a case | Seller side closes; the customer's case is marked unread for staff with an internal note. |
+| Staff resolve or close a case | The seller side is **closed** (not resolved): the seller has nothing left to do and cannot reopen it. If the customer reopens and staff need the seller again, they use "Ask the seller" again, which opens a new seller ticket. |
+| Closed | Final for customers and sellers; they open a new request. Staff can reopen it. |
+
+The same rules apply to sellers' own tickets (payouts, KYC and so on).
+
 ## Checks outside support (findings, 2026-10-30)
 
 - **Cancellation charges:** none exist; customers cancel free while the package allows it. Nothing to change.

@@ -682,6 +682,9 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
                     @if ($ticket->resolved_at)
                         <div class="flex justify-between gap-2"><dt class="text-zinc-500 dark:text-zinc-400">Resolved</dt><dd class="text-right text-zinc-900 dark:text-white">@datetime($ticket->resolved_at)</dd></div>
                     @endif
+                    @if ($closesAt = $ticket->autoClosesAt())
+                        <div class="flex justify-between gap-2"><dt class="text-zinc-500 dark:text-zinc-400">{{ ucfirst($ticket->requester_type->value) }} can reopen until</dt><dd class="text-right text-zinc-900 dark:text-white">@datetime($closesAt)</dd></div>
+                    @endif
                     @if ($ticket->closed_at)
                         <div class="flex justify-between gap-2"><dt class="text-zinc-500 dark:text-zinc-400">Closed</dt><dd class="text-right text-zinc-900 dark:text-white">@datetime($ticket->closed_at)</dd></div>
                     @endif

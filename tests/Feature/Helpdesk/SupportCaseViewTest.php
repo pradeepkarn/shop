@@ -93,15 +93,19 @@ test('the tabs switch conversations and replies go to the open side', function (
         ->and($s['ticket']->messages()->where('body', 'Please also confirm the dispatch date.')->exists())->toBeFalse();
 });
 
-test('resolving the customer ticket resolves the seller side too', function () {
+test('resolving the customer ticket closes the seller side, which the seller cannot reopen', function () {
     $s = relayScenario();
     $sellerTicket = askRelaySeller($s);
 
     app(HelpdeskService::class)->setStatus($s['ticket']->fresh(), $s['admin'], TicketStatus::Resolved);
 
     expect($s['ticket']->fresh()->status)->toBe(TicketStatus::Resolved)
-        ->and($sellerTicket->fresh()->status)->toBe(TicketStatus::Resolved)
-        ->and($sellerTicket->fresh()->reply_due_at)->toBeNull();
+        ->and($sellerTicket->fresh()->status)->toBe(TicketStatus::Closed)
+        ->and($sellerTicket->fresh()->reply_due_at)->toBeNull()
+        ->and($sellerTicket->fresh()->requester_unread)->toBeTrue();
+
+    expect(fn () => app(HelpdeskService::class)->replyAsRequester($sellerTicket->fresh(), $s['seller'], 'One more thing', reopen: true))
+        ->toThrow(DomainException::class);
 });
 
 test('assigning the case assigns both sides', function () {

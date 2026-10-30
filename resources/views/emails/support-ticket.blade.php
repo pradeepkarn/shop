@@ -24,7 +24,7 @@
         @case('resolved')
             <h2>Your request is resolved</h2>
             <p>We have marked your request <strong>{{ $ticketNumber }}</strong> ("{{ $subjectLine }}") as resolved.</p>
-            <p>If something is still not right, just reply on the request within {{ $autoCloseDays }} days and it will reopen.</p>
+            <p>If something is still not right, open the request and choose <strong>"No, I still need help"</strong> within {{ $autoCloseDays }} days. Otherwise it closes by itself.</p>
             @break
 
         @case('seller_action')
