@@ -31,6 +31,17 @@ class HelpdeskSellerOrderLookupAdapter implements SellerOrderLookupInterface
         return array_values($sellerOrders->map(fn (SellerOrder $sellerOrder) => $this->toRef($sellerOrder))->all());
     }
 
+    public function forOrder(string $orderId): array
+    {
+        $sellerOrders = SellerOrder::query()
+            ->with(['order', 'items'])
+            ->where('order_id', $orderId)
+            ->orderBy('id')
+            ->get();
+
+        return array_values($sellerOrders->map(fn (SellerOrder $sellerOrder) => $this->toRef($sellerOrder))->all());
+    }
+
     protected function toRef(SellerOrder $sellerOrder): SellerOrderRef
     {
         $titles = $sellerOrder->items->pluck('title');
@@ -41,6 +52,7 @@ class HelpdeskSellerOrderLookupAdapter implements SellerOrderLookupInterface
 
         return new SellerOrderRef(
             sellerOrderId: (string) $sellerOrder->id,
+            sellerProfileId: $sellerOrder->seller_profile_id,
             orderId: (string) $sellerOrder->order_id,
             orderNumber: $sellerOrder->order->order_number,
             placedAt: format_datetime($sellerOrder->placed_at),

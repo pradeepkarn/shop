@@ -52,4 +52,45 @@ return [
     |
     */
     'auto_close_resolved_days' => 7,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Auto-resolve
+    |--------------------------------------------------------------------------
+    |
+    | Tickets waiting on the customer (or a seller's own ticket waiting on the
+    | seller) with no reply for this many days are resolved by the
+    | helpdesk:resolve-unanswered command. They can still reopen it until it
+    | auto-closes.
+    |
+    */
+    'pending_auto_resolve_days' => 7,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Seller Replies
+    |--------------------------------------------------------------------------
+    |
+    | Hours a seller has to answer a staff message on a seller ticket, and how
+    | many hours before that deadline helpdesk:remind-sellers sends a reminder.
+    |
+    */
+    'seller_reply_hours' => 48,
+
+    'seller_reminder_hours_left' => 24,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Complaint Timelines
+    |--------------------------------------------------------------------------
+    |
+    | Consumer Protection (E-Commerce) Rules, 2020: acknowledge within 48 hours,
+    | resolve within one month. The inbox warns from warn_after_days.
+    |
+    */
+    'acknowledge_within_hours' => 48,
+
+    'resolve_within_days' => 30,
+
+    'warn_after_days' => 25,
 ];

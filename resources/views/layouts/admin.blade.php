@@ -274,11 +274,11 @@
                         </svg>
                         <span class="flex-1">Support</span>
                         @php
-                            $supportUnassignedCount = \App\Helpdesk\Models\SupportTicket::query()->where('status', 'open')->whereNull('assigned_admin_id')->count();
+                            $supportUnread = app(\App\Helpdesk\Services\HelpdeskService::class)->unreadCountForStaff((int) auth('admin')->id());
                         @endphp
-                        @if ($supportUnassignedCount > 0)
+                        @if ($supportUnread > 0)
                             <span class="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
-                                {{ $supportUnassignedCount }}
+                                {{ $supportUnread > 99 ? '99+' : $supportUnread }}
                             </span>
                         @endif
                     </a>
@@ -637,11 +637,11 @@
                         </svg>
                         <span class="flex-1">Support</span>
                         @php
-                            $supportUnassignedCount = \App\Helpdesk\Models\SupportTicket::query()->where('status', 'open')->whereNull('assigned_admin_id')->count();
+                            $supportUnread = app(\App\Helpdesk\Services\HelpdeskService::class)->unreadCountForStaff((int) auth('admin')->id());
                         @endphp
-                        @if ($supportUnassignedCount > 0)
+                        @if ($supportUnread > 0)
                             <span class="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
-                                {{ $supportUnassignedCount }}
+                                {{ $supportUnread > 99 ? '99+' : $supportUnread }}
                             </span>
                         @endif
                     </a>

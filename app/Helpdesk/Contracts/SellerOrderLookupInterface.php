@@ -17,4 +17,11 @@ interface SellerOrderLookupInterface
      * @return list<SellerOrderRef>
      */
     public function recentForSeller(int $sellerProfileId, int $limit = 30): array;
+
+    /**
+     * Every seller's package within one customer order (one per seller).
+     *
+     * @return list<SellerOrderRef>
+     */
+    public function forOrder(string $orderId): array;
 }

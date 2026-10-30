@@ -38,6 +38,7 @@ new #[Layout('layouts.app')] #[Title('Help & Support')] class extends Component 
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white sm:text-3xl">Help &amp; Support</h1>
             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Ask about an order, a refund, or anything else. Our team replies here and by email.</p>
+            <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Not happy with how a request was handled? Contact our <a href="{{ route('grievance-officer') }}" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Grievance Officer</a>.</p>
         </div>
         <a href="{{ route('support.create') }}" wire:navigate
            class="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:bg-amber-600 transition">
@@ -72,7 +73,15 @@ new #[Layout('layouts.app')] #[Title('Help & Support')] class extends Component 
                                         <span class="text-xs text-zinc-400">&middot; Order {{ $ticket->order_number }}</span>
                                     @endif
                                 </div>
-                                <p class="mt-0.5 truncate text-sm font-semibold text-zinc-900 dark:text-white">{{ $ticket->subject }}</p>
+                                <p class="mt-0.5 flex items-center gap-2 text-sm text-zinc-900 dark:text-white">
+                                    @if ($ticket->requester_unread)
+                                        <span class="size-2 shrink-0 rounded-full bg-rose-500" title="New reply from support"></span>
+                                    @endif
+                                    <span @class(['truncate', 'font-bold' => $ticket->requester_unread, 'font-semibold' => ! $ticket->requester_unread])>{{ $ticket->subject }}</span>
+                                    @if ($ticket->requester_unread)
+                                        <span data-test="ticket-new-reply" class="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">New reply</span>
+                                    @endif
+                                </p>
                             </div>
                             <div class="flex shrink-0 items-center gap-3">
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 {{ $ticket->status->badgeClasses() }}">

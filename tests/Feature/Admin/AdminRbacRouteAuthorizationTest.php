@@ -219,6 +219,8 @@ dataset('admin_protected_routes', [
     ['admin.settings.branding', AdminPermissions::BRANDING_VIEW],
     ['admin.support.index', AdminPermissions::SUPPORT_VIEW],
     ['admin.support.show', AdminPermissions::SUPPORT_VIEW],
+    ['admin.support.settings', AdminPermissions::SUPPORT_SETTINGS],
+    ['admin.support.report', AdminPermissions::SUPPORT_VIEW],
 ]);
 
 test('admin route returns 403 when staff lacks required permission and 200 when granted', function (string $routeName, string $permission) {

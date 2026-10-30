@@ -173,7 +173,7 @@ test('customer can download their own attachment but not another customer\'s', f
     $this->actingAs($other)->get($url)->assertNotFound();
 });
 
-test('customer reply reopens a pending or resolved ticket', function () {
+test('customer reply puts a pending ticket back with staff; a resolved one only reopens on purpose', function () {
     $user = User::factory()->create();
     $ticket = openHelpdeskTicket($user);
     $admin = Admin::factory()->create();
@@ -192,10 +192,17 @@ test('customer reply reopens a pending or resolved ticket', function () {
     expect($ticket->refresh()->status)->toBe(TicketStatus::Open);
 
     $helpdesk->setStatus($ticket, $admin, TicketStatus::Resolved);
-    $helpdesk->replyAsRequester($ticket->refresh(), $user, 'Actually it is still wrong.');
+
+    // A plain reply ("thanks") does not reopen a resolved ticket
+    expect(fn () => $helpdesk->replyAsRequester($ticket->refresh(), $user, 'Thanks!'))
+        ->toThrow(DomainException::class);
+    expect($ticket->refresh()->status)->toBe(TicketStatus::Resolved);
+
+    $helpdesk->replyAsRequester($ticket->refresh(), $user, 'Actually it is still wrong.', reopen: true);
 
     expect($ticket->refresh()->status)->toBe(TicketStatus::Open)
-        ->and($ticket->resolved_at)->toBeNull();
+        ->and($ticket->resolved_at)->toBeNull()
+        ->and($ticket->messages()->where('body', 'Reopened by the customer.')->exists())->toBeTrue();
 });
 
 test('customer can close a ticket and then cannot reply', function () {

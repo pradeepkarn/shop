@@ -3,6 +3,8 @@
     'messages',
     // 'requester' (customer pages) or 'staff' (admin pages)
     'viewer' => 'requester',
+    // Staff only: show "Forward" on customer/seller messages when the ticket has an open linked ticket
+    'forwardable' => false,
 ])
 
 @php
@@ -45,6 +47,9 @@
                             <span class="rounded-full bg-amber-200/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:bg-amber-900/60 dark:text-amber-300">Internal note</span>
                         @endif
                         <span class="text-zinc-400">@datetime($message->created_at)</span>
+                        @if ($forwardable && $viewer === 'staff' && $message->author_type === MessageAuthor::Requester && ! $message->is_internal)
+                            <button type="button" wire:click="startForward({{ $message->id }})" class="ml-auto rounded-md px-2 py-0.5 text-[11px] font-semibold text-violet-700 hover:bg-violet-100 dark:text-violet-300 dark:hover:bg-violet-900/40">Forward</button>
+                        @endif
                     </div>
 
                     <div class="whitespace-pre-line break-words text-sm text-zinc-700 dark:text-zinc-300">{{ $message->body }}</div>
