@@ -1,6 +1,7 @@
 <?php
 
 use App\Checkout\Services\CheckoutIntentService;
+use App\Helpdesk\Http\Controllers\TicketAttachmentController;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -42,6 +43,11 @@ Route::middleware('auth')->group(function () {
     Route::livewire('orders/{order}/success', 'pages::storefront.order-success')->name('orders.success');
     Route::livewire('orders/{order}', 'pages::storefront.order-show')->name('orders.show');
     Route::livewire('addresses', 'pages::storefront.address-index')->name('addresses.index');
+
+    Route::livewire('support', 'pages::storefront.support-index')->name('support.index');
+    Route::livewire('support/new', 'pages::storefront.support-create')->name('support.create');
+    Route::livewire('support/{ticket}', 'pages::storefront.support-show')->name('support.show');
+    Route::get('support/{ticket}/messages/{message}/attachments/{index}', [TicketAttachmentController::class, 'requester'])->whereNumber(['message', 'index'])->name('support.attachment');
 });
 
 Route::livewire('welcome/{token}', 'pages::auth.welcome')->name('welcome');

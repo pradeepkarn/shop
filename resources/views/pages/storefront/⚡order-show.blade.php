@@ -276,7 +276,11 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                 Placed on @datetime($order->placed_at)
             </p>
         </div>
-        <div>
+        <div class="flex flex-wrap items-center gap-3">
+            <a href="{{ route('support.create', ['order' => $order->order_number]) }}" wire:navigate data-test="order-help-link"
+               class="text-xs font-bold uppercase tracking-wider text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                Need help with this order?
+            </a>
             <span class="inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-bold uppercase {{ $order->status->value === 'cancelled' ? 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300' : ($order->status->value === 'completed' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300' : 'bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200') }}">
                 Status: {{ $order->status->label() }}
             </span>

@@ -2,6 +2,7 @@
 
 use App\Content\Models\ContentPage;
 use App\Content\Services\PageResolver;
+use App\Helpdesk\Http\Controllers\TicketAttachmentController;
 use App\Http\Controllers\Admin\AdminSellerDocumentController;
 use App\Http\Middleware\AuthenticateAdminSession;
 use App\Http\Middleware\EnsureAdminIsActive;
@@ -65,6 +66,11 @@ Route::middleware(['auth:admin', EnsureAdminIsActive::class, AuthenticateAdminSe
     Route::get('returns/requests/{request}/photos/{kind}/{index}', [ReturnPhotoController::class, 'admin'])->whereIn('kind', ['customer', 'seller'])->whereNumber('index')->name('returns.request-photo')->middleware('can:returns.view');
     Route::livewire('refunds', 'pages::admin.refunds-index')->name('refunds.index')->middleware('can:returns.view');
     Route::get('returns/rto-reports/{report}/photos/{index}', [RtoPhotoController::class, 'admin'])->whereNumber('index')->name('returns.rto-photo')->middleware('can:returns.view');
+
+    // Customer Support
+    Route::livewire('support', 'pages::admin.support-index')->name('support.index')->middleware('can:support.view');
+    Route::livewire('support/{ticket}', 'pages::admin.support-show')->name('support.show')->middleware('can:support.view');
+    Route::get('support/{ticket}/messages/{message}/attachments/{index}', [TicketAttachmentController::class, 'admin'])->whereNumber(['message', 'index'])->name('support.attachment')->middleware('can:support.view');
 
     // Staff & Roles Management
     Route::livewire('staff', 'pages::admin.staff')->name('staff')->middleware('can:admins.view');

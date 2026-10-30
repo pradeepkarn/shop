@@ -26,3 +26,7 @@ Schedule::command('shipping:poll-tracking')
 
 Schedule::command('content:publish-scheduled')
     ->everyMinute();
+
+Schedule::command('helpdesk:close-resolved')
+    ->dailyAt('03:00')
+    ->timezone($displayTimezone);
