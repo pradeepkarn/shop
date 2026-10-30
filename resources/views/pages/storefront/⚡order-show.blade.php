@@ -176,7 +176,7 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
     #[Computed]
     public function order(): ?Order
     {
-        return Order::with(['sellerOrders.items.variant.product', 'sellerOrders.statusHistories'])
+        return Order::with(['sellerOrders.items.variant.product', 'sellerOrders.statusHistories', 'sellerOrders.sellerProfile:id,store_slug'])
             ->where('order_number', $this->orderNumber)
             ->first();
     }
@@ -330,7 +330,11 @@ new #[Layout('layouts.app')] #[Title('Order Details')] class extends Component {
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-zinc-100 pb-4 dark:border-zinc-800">
                         <div>
                             <span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Package from</span>
-                            <span class="ml-1 text-sm font-bold text-zinc-900 dark:text-white">{{ $sellerOrder->seller_store_name }}</span>
+                            @if ($sellerOrder->sellerProfile?->store_slug)
+                                <a href="{{ route('sellers.show', ['slug' => $sellerOrder->sellerProfile->store_slug]) }}" class="ml-1 text-sm font-bold text-zinc-900 hover:underline dark:text-white">{{ $sellerOrder->seller_store_name }}</a>
+                            @else
+                                <span class="ml-1 text-sm font-bold text-zinc-900 dark:text-white">{{ $sellerOrder->seller_store_name }}</span>
+                            @endif
                             @if ($sellerOrder->seller_pickup_state)
                                 <span class="text-xs text-zinc-400">({{ $sellerOrder->seller_pickup_state }})</span>
                             @endif
