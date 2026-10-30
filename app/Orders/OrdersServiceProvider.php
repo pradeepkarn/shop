@@ -4,7 +4,9 @@ namespace App\Orders;
 
 use App\Coupons\Contracts\CustomerEligibilityInterface;
 use App\Helpdesk\Contracts\CustomerOrderLookupInterface;
+use App\Helpdesk\Contracts\SellerOrderLookupInterface;
 use App\Orders\Adapters\HelpdeskCustomerOrderLookupAdapter;
+use App\Orders\Adapters\HelpdeskSellerOrderLookupAdapter;
 use App\Orders\Adapters\OrderCustomerEligibilityAdapter;
 use App\Orders\Adapters\OrderDeliveredReviewEligibilityAdapter;
 use App\Orders\Contracts\CustomerRefundServiceInterface;
@@ -48,6 +50,7 @@ class OrdersServiceProvider extends ServiceProvider
         CustomerEligibilityInterface::class => OrderCustomerEligibilityAdapter::class,
         ReviewEligibilityInterface::class => OrderDeliveredReviewEligibilityAdapter::class,
         CustomerOrderLookupInterface::class => HelpdeskCustomerOrderLookupAdapter::class,
+        SellerOrderLookupInterface::class => HelpdeskSellerOrderLookupAdapter::class,
     ];
 
     public function register(): void

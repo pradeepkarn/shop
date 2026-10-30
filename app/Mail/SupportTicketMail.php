@@ -43,7 +43,7 @@ class SupportTicketMail extends Mailable implements ShouldQueue
                 'name' => $this->ticket->requester_name,
                 'ticketNumber' => $this->ticket->ticket_number,
                 'subjectLine' => $this->ticket->subject,
-                'url' => route('support.show', ['ticket' => $this->ticket->ticket_number]),
+                'url' => $this->ticket->requesterUrl(),
                 'autoCloseDays' => (int) config('helpdesk.auto_close_resolved_days'),
             ],
         );

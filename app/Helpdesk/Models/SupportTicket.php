@@ -7,6 +7,7 @@ use App\Helpdesk\Enums\TicketCategory;
 use App\Helpdesk\Enums\TicketPriority;
 use App\Helpdesk\Enums\TicketStatus;
 use App\Models\Admin;
+use App\Models\SellerProfile;
 use App\Models\User;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -21,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $ticket_number
  * @property RequesterType $requester_type
  * @property int|null $user_id
+ * @property int|null $seller_profile_id
  * @property string $requester_name
  * @property string $requester_email
  * @property TicketCategory $category
@@ -29,6 +31,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property TicketPriority $priority
  * @property string|null $order_id
  * @property string|null $order_number
+ * @property string|null $seller_order_id
  * @property int|null $assigned_admin_id
  * @property CarbonInterface|null $last_message_at
  * @property CarbonInterface|null $first_response_at
@@ -37,6 +40,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property CarbonInterface|null $created_at
  * @property CarbonInterface|null $updated_at
  * @property-read User|null $user
+ * @property-read SellerProfile|null $sellerProfile
  * @property-read Admin|null $assignee
  * @property-read Collection<int, SupportTicketMessage> $messages
  */
@@ -74,6 +78,14 @@ class SupportTicket extends Model
     }
 
     /**
+     * @return BelongsTo<SellerProfile, $this>
+     */
+    public function sellerProfile(): BelongsTo
+    {
+        return $this->belongsTo(SellerProfile::class, 'seller_profile_id');
+    }
+
+    /**
      * @return BelongsTo<Admin, $this>
      */
     public function assignee(): BelongsTo
@@ -100,5 +112,15 @@ class SupportTicket extends Model
     public function isOwnedBy(int $userId): bool
     {
         return $this->user_id !== null && (int) $this->user_id === $userId;
+    }
+
+    /**
+     * Where the requester reads this ticket: the storefront account or the seller panel.
+     */
+    public function requesterUrl(): string
+    {
+        return $this->requester_type === RequesterType::Seller
+            ? route('seller.support.show', ['ticket' => $this->ticket_number])
+            : route('support.show', ['ticket' => $this->ticket_number]);
     }
 }

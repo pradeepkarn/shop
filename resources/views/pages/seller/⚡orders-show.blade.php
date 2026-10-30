@@ -421,6 +421,10 @@ new #[Layout('layouts.seller')] #[Title('Order Details')] class extends Componen
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
+            <a href="{{ route('seller.support.create', ['order' => $sellerOrder->id]) }}" wire:navigate data-test="seller-order-help-link"
+               class="text-xs font-bold uppercase tracking-wider text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                Need help with this order?
+            </a>
             <span class="inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-bold uppercase {{ $sellerOrder->status->value === 'cancelled' ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300' : 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' }}">
                 Status: {{ $sellerOrder->status->label() }}
             </span>
