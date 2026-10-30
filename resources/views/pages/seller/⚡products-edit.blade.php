@@ -54,6 +54,14 @@ new #[Layout('layouts.seller')] #[Title('Edit Product')] class extends Component
             return;
         }
 
+        // Drafts are finished in the wizard, which runs the checks before QC; other sellers' drafts are not theirs to see
+        if ($product->qc_status === ProductQcStatus::Draft) {
+            abort_unless($product->created_by === $seller->id, 404);
+            $this->redirect(route('seller.products.create', ['draft' => $product->id]), navigate: true);
+
+            return;
+        }
+
         $this->product = $product->load(['vertical.attributes', 'brand', 'variants.listings', 'images']);
         $this->isCreator = ($this->product->created_by === $seller->id);
 

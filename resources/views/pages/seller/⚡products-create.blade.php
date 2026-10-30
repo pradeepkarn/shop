@@ -30,6 +30,9 @@ use Livewire\WithFileUploads;
 new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component {
     use WithFileUploads;
 
+    // Title autosave gives a draft saved before step 3
+    private const UNTITLED_DRAFT = 'Untitled Draft Product';
+
     // Search catalog state
     public string $catalog_search = '';
     public bool $isCreatingNew = false;
@@ -94,15 +97,54 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
             $this->brand_id = $genericBrand->id;
         }
 
-        // Check if there is an in-progress draft for this seller
-        $existingDraft = Product::where('created_by', $seller->id)
-            ->where('qc_status', ProductQcStatus::Draft)
-            ->latest('id')
-            ->first();
+        // ?draft=ID continues that draft (My Products "Continue"); otherwise resume the newest one
+        $requestedId = request()->integer('draft');
+        if ($requestedId) {
+            $requested = Product::where('created_by', $seller->id)->findOrFail($requestedId);
+
+            if ($requested->qc_status !== ProductQcStatus::Draft) {
+                $this->redirect(route('seller.products.edit', $requested), navigate: true);
+
+                return;
+            }
+
+            $existingDraft = $requested;
+        } else {
+            $existingDraft = Product::where('created_by', $seller->id)
+                ->where('qc_status', ProductQcStatus::Draft)
+                ->latest('id')
+                ->first();
+        }
 
         if ($existingDraft) {
             $this->loadDraft($existingDraft);
+            $this->currentStep = $this->firstUnfinishedStep($existingDraft);
         }
+    }
+
+    /**
+     * Where a resumed draft should open: the first step that still needs input.
+     */
+    protected function firstUnfinishedStep(Product $draft): int
+    {
+        if (! $draft->vertical_id) {
+            return 1;
+        }
+
+        if (! $draft->brand_id) {
+            return 2;
+        }
+
+        $untitled = $draft->title === self::UNTITLED_DRAFT || mb_strlen($draft->title) < 5;
+        if ($untitled || mb_strlen((string) $draft->description) < 10 || $draft->missingDeclarations()) {
+            return 3;
+        }
+
+        if ($draft->variants()->doesntExist() || $draft->images()->doesntExist()) {
+            return 4;
+        }
+
+        return 5;
     }
 
     public function loadDraft(Product $draft): void
@@ -110,7 +152,7 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
         $this->draftProductId = $draft->id;
         $this->vertical_id = $draft->vertical_id;
         $this->brand_id = $draft->brand_id;
-        $this->title = $draft->title;
+        $this->title = $draft->title === self::UNTITLED_DRAFT ? '' : $draft->title;
         $this->description = $draft->description ?? '';
         $this->highlights = ! empty($draft->highlights) ? $draft->highlights : [''];
         $this->specs = $draft->specs ?? [];
@@ -535,7 +577,7 @@ new #[Layout('layouts.seller')] #[Title('Add Product')] class extends Component 
         $productData = [
             'vertical_id' => $this->vertical_id,
             'brand_id' => $this->brand_id,
-            'title' => $this->title ?: 'Untitled Draft Product',
+            'title' => $this->title ?: self::UNTITLED_DRAFT,
             'description' => $this->description ?: '',
             'highlights' => array_values(array_filter($this->highlights, fn ($h) => trim($h) !== '')),
             'specs' => $this->specs,
