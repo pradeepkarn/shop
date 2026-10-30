@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Storefront;
 
+use App\Helpdesk\Enums\RequesterType;
 use App\Helpdesk\Enums\TicketStatus;
 use App\Helpdesk\Models\SupportTicket;
 use App\Helpdesk\Services\HelpdeskService;
@@ -33,7 +34,11 @@ new #[Layout('layouts.app')] #[Title('Support Request')] class extends Component
     #[Computed]
     public function ticket(): ?SupportTicket
     {
-        return SupportTicket::query()->where('ticket_number', $this->ticketNumber)->first();
+        // Seller tickets live in the seller panel
+        return SupportTicket::query()
+            ->where('ticket_number', $this->ticketNumber)
+            ->where('requester_type', RequesterType::Customer->value)
+            ->first();
     }
 
     /**
@@ -127,22 +132,7 @@ new #[Layout('layouts.app')] #[Title('Support Request')] class extends Component
                       placeholder="Write your message"></textarea>
             @error('reply') <p class="text-xs text-rose-600 dark:text-rose-400">{{ $message }}</p> @enderror
 
-            <div>
-                <input type="file" wire:model="attachments" multiple accept=".jpg,.jpeg,.png,.webp,.pdf"
-                       class="block w-full text-xs text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-zinc-800 hover:file:bg-zinc-200 dark:text-zinc-400 dark:file:bg-zinc-800 dark:file:text-zinc-200" />
-                <div wire:loading wire:target="attachments" class="mt-1 text-xs text-zinc-500">Uploading…</div>
-                @if ($attachments)
-                    <ul class="mt-2 space-y-1">
-                        @foreach ($attachments as $i => $file)
-                            <li class="flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-1.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" wire:key="att-{{ $i }}">
-                                <span class="truncate">{{ $file->getClientOriginalName() }}</span>
-                                <button type="button" wire:click="removeAttachment({{ $i }})" class="ml-2 text-rose-600 hover:text-rose-700 dark:text-rose-400">Remove</button>
-                            </li>
-                        @endforeach
-                    </ul>
-                @endif
-                @error('attachments') <p class="mt-1 text-xs text-rose-600 dark:text-rose-400">{{ $message }}</p> @enderror
-            </div>
+            <x-support.attachments-input :files="$attachments" />
 
             <div class="flex flex-col-reverse gap-3 border-t border-zinc-100 pt-3 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
                 <button type="button" wire:click="closeTicket" wire:confirm="Close this request? You will not be able to reply on it again."

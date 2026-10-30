@@ -3,6 +3,7 @@
 namespace App\Helpdesk\Services;
 
 use App\Helpdesk\Contracts\CustomerOrderLookupInterface;
+use App\Helpdesk\Contracts\SellerOrderLookupInterface;
 use App\Helpdesk\Enums\MessageAuthor;
 use App\Helpdesk\Enums\RequesterType;
 use App\Helpdesk\Enums\TicketCategory;
@@ -25,12 +26,15 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Ticket lifecycle for requesters (customers now, sellers in phase 2) and admin staff.
+ * Ticket lifecycle for requesters (customers and sellers) and admin staff.
  * Staff actions are written to the admin activity log here so every caller is covered.
  */
 class HelpdeskService
 {
-    public function __construct(protected CustomerOrderLookupInterface $orders) {}
+    public function __construct(
+        protected CustomerOrderLookupInterface $orders,
+        protected SellerOrderLookupInterface $sellerOrders,
+    ) {}
 
     /**
      * @param  array<int, UploadedFile>  $attachments
@@ -43,6 +47,72 @@ class HelpdeskService
         ?string $orderNumber = null,
         array $attachments = [],
     ): SupportTicket {
+        [$subject, $body] = $this->validateNewTicket(RequesterType::Customer, $category, $subject, $body, $attachments);
+
+        $order = null;
+        if ($orderNumber !== null && $orderNumber !== '') {
+            $order = $this->orders->findForCustomer((int) $user->id, $orderNumber);
+            if (! $order) {
+                throw new DomainException('We could not find that order on your account.');
+            }
+        }
+
+        return $this->createTicket($user, [
+            'requester_type' => RequesterType::Customer,
+            'requester_name' => $user->name,
+            'order_id' => $order?->orderId,
+            'order_number' => $order?->orderNumber,
+        ], $category, $subject, $body, $attachments);
+    }
+
+    /**
+     * A ticket from the seller who owns $user's store, optionally about one of their packages.
+     *
+     * @param  array<int, UploadedFile>  $attachments
+     */
+    public function openSellerTicket(
+        User $user,
+        TicketCategory $category,
+        string $subject,
+        string $body,
+        ?string $sellerOrderId = null,
+        array $attachments = [],
+    ): SupportTicket {
+        $profile = $user->sellerProfile;
+        if (! $profile) {
+            throw new DomainException('Only sellers can open seller support requests.');
+        }
+
+        [$subject, $body] = $this->validateNewTicket(RequesterType::Seller, $category, $subject, $body, $attachments);
+
+        $sellerOrder = null;
+        if ($sellerOrderId !== null && $sellerOrderId !== '') {
+            $sellerOrder = $this->sellerOrders->findForSeller((int) $profile->id, $sellerOrderId);
+            if (! $sellerOrder) {
+                throw new DomainException('We could not find that order in your store.');
+            }
+        }
+
+        return $this->createTicket($user, [
+            'requester_type' => RequesterType::Seller,
+            'requester_name' => $profile->store_name,
+            'seller_profile_id' => $profile->id,
+            'order_id' => $sellerOrder?->orderId,
+            'order_number' => $sellerOrder?->orderNumber,
+            'seller_order_id' => $sellerOrder?->sellerOrderId,
+        ], $category, $subject, $body, $attachments);
+    }
+
+    /**
+     * @param  array<int, mixed>  $attachments
+     * @return array{0: string, 1: string} trimmed subject and body
+     */
+    protected function validateNewTicket(RequesterType $type, TicketCategory $category, string $subject, string $body, array $attachments): array
+    {
+        if (! in_array($category, TicketCategory::for($type), true)) {
+            throw new DomainException('Choose one of the listed topics.');
+        }
+
         $subject = trim($subject);
         $body = trim($body);
 
@@ -55,21 +125,26 @@ class HelpdeskService
         ])->validate();
         $this->validateAttachments($attachments);
 
-        $order = null;
-        if ($orderNumber !== null && $orderNumber !== '') {
-            $order = $this->orders->findForCustomer((int) $user->id, $orderNumber);
-            if (! $order) {
-                throw new DomainException('We could not find that order on your account.');
-            }
-        }
+        return [$subject, $body];
+    }
 
-        $openCount = SupportTicket::query()->where('user_id', $user->id)->notClosed()->count();
+    /**
+     * Applies the per-requester limits, then creates the ticket with its first message.
+     *
+     * @param  array<string, mixed>  $requester  requester_type, requester_name and order/seller fields
+     * @param  array<int, UploadedFile>  $attachments
+     */
+    protected function createTicket(User $user, array $requester, TicketCategory $category, string $subject, string $body, array $attachments): SupportTicket
+    {
+        // Limits count per requester type, so a seller's store tickets do not block their shopping account
+        $mine = fn () => SupportTicket::query()->where('user_id', $user->id)->where('requester_type', $requester['requester_type']->value);
+
+        $openCount = $mine()->notClosed()->count();
         if ($openCount >= (int) config('helpdesk.max_open_tickets')) {
             throw new DomainException('You already have '.$openCount.' open requests. Please reply on one of those, or close one you no longer need.');
         }
 
-        $todayCount = SupportTicket::query()->where('user_id', $user->id)->where('created_at', '>=', now()->subDay())->count();
-        if ($todayCount >= (int) config('helpdesk.max_new_tickets_per_day')) {
+        if ($mine()->where('created_at', '>=', now()->subDay())->count() >= (int) config('helpdesk.max_new_tickets_per_day')) {
             throw new DomainException('You have opened too many requests today. Please try again tomorrow.');
         }
 
@@ -77,21 +152,18 @@ class HelpdeskService
         $stored = $this->storeAttachments($ticketId, $attachments);
 
         try {
-            $ticket = DB::transaction(function () use ($ticketId, $user, $category, $subject, $body, $order, $stored) {
+            $ticket = DB::transaction(function () use ($ticketId, $user, $requester, $category, $subject, $body, $stored) {
                 $ticket = SupportTicket::create([
                     'id' => $ticketId,
                     'ticket_number' => $this->newTicketNumber(),
-                    'requester_type' => RequesterType::Customer,
                     'user_id' => $user->id,
-                    'requester_name' => $user->name,
                     'requester_email' => $user->email,
                     'category' => $category,
                     'subject' => $subject,
                     'status' => TicketStatus::Open,
                     'priority' => TicketPriority::Normal,
-                    'order_id' => $order?->orderId,
-                    'order_number' => $order?->orderNumber,
                     'last_message_at' => now(),
+                    ...$requester,
                 ]);
 
                 $ticket->messages()->create([

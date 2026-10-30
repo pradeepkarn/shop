@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Admin;
 
+use App\Helpdesk\Enums\RequesterType;
 use App\Helpdesk\Enums\TicketCategory;
 use App\Helpdesk\Enums\TicketPriority;
 use App\Helpdesk\Enums\TicketStatus;
@@ -28,6 +29,10 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
     #[Url]
     public string $assignee = 'all';
 
+    /** all, customer, seller */
+    #[Url]
+    public string $requester = 'all';
+
     #[Url]
     public string $category = 'all';
 
@@ -41,7 +46,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
 
     public function updating(string $property): void
     {
-        if (in_array($property, ['search', 'status', 'assignee', 'category', 'priority'], true)) {
+        if (in_array($property, ['search', 'status', 'assignee', 'requester', 'category', 'priority'], true)) {
             $this->resetPage();
         }
     }
@@ -77,6 +82,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             ->when(TicketStatus::tryFrom($this->status), fn ($q, $status) => $q->where('status', $status->value))
             ->when($this->assignee === 'mine', fn ($q) => $q->where('assigned_admin_id', auth('admin')->id()))
             ->when($this->assignee === 'unassigned', fn ($q) => $q->whereNull('assigned_admin_id'))
+            ->when(RequesterType::tryFrom($this->requester), fn ($q, $type) => $q->where('requester_type', $type->value))
             ->when(TicketCategory::tryFrom($this->category), fn ($q, $category) => $q->where('category', $category->value))
             ->when(TicketPriority::tryFrom($this->priority), fn ($q, $priority) => $q->where('priority', $priority->value))
             ->when(trim($this->search) !== '', function ($q) {
@@ -99,7 +105,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">Support Inbox</h1>
-            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Customer requests. Urgent and longest-waiting tickets come first.</p>
+            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Customer and seller requests. Urgent and longest-waiting tickets come first.</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -118,16 +124,16 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         </div>
     </div>
 
-    <div class="grid grid-cols-1 gap-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-xs sm:grid-cols-2 lg:grid-cols-6 dark:border-zinc-800 dark:bg-zinc-900">
+    <div class="grid grid-cols-1 gap-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-xs sm:grid-cols-2 lg:grid-cols-7 dark:border-zinc-800 dark:bg-zinc-900">
         <div class="relative lg:col-span-2">
-            <input type="text" wire:model.live.debounce.300ms="search" placeholder="Ticket, subject, customer, email, order…"
+            <input type="text" wire:model.live.debounce.300ms="search" placeholder="Ticket, subject, name, store, email, order…"
                    class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 pl-9 text-sm text-zinc-900 placeholder-zinc-400 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-800 dark:text-white dark:placeholder-zinc-500 dark:focus:border-white" />
             <svg class="absolute left-3 top-2.5 size-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
 
         <select wire:model.live="status" class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
             <option value="open">Needs reply ({{ $this->counts['open'] }})</option>
-            <option value="pending">Awaiting customer ({{ $this->counts['pending'] }})</option>
+            <option value="pending">Awaiting requester ({{ $this->counts['pending'] }})</option>
             <option value="resolved">Resolved ({{ $this->counts['resolved'] }})</option>
             <option value="closed">Closed</option>
             <option value="active">All active</option>
@@ -138,6 +144,12 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             <option value="all">Anyone</option>
             <option value="mine">Assigned to me</option>
             <option value="unassigned">Unassigned</option>
+        </select>
+
+        <select wire:model.live="requester" class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
+            <option value="all">Customers &amp; sellers</option>
+            <option value="customer">Customers</option>
+            <option value="seller">Sellers</option>
         </select>
 
         <select wire:model.live="category" class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
@@ -161,7 +173,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                 <thead class="border-b border-zinc-200 bg-zinc-50/75 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-800 dark:bg-zinc-800/50 dark:text-zinc-400">
                     <tr>
                         <th scope="col" class="px-4 py-3.5">Ticket</th>
-                        <th scope="col" class="px-4 py-3.5">Customer</th>
+                        <th scope="col" class="px-4 py-3.5">From</th>
                         <th scope="col" class="px-4 py-3.5">Status</th>
                         <th scope="col" class="px-4 py-3.5">Priority</th>
                         <th scope="col" class="px-4 py-3.5">Assignee</th>
@@ -181,7 +193,12 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                                 </a>
                             </td>
                             <td class="whitespace-nowrap px-4 py-3.5">
-                                <div class="font-medium text-zinc-900 dark:text-white">{{ $ticket->requester_name }}</div>
+                                <div class="flex items-center gap-1.5 font-medium text-zinc-900 dark:text-white">
+                                    @if ($ticket->requester_type === RequesterType::Seller)
+                                        <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">Seller</span>
+                                    @endif
+                                    <span>{{ $ticket->requester_name }}</span>
+                                </div>
                                 <div class="max-w-[180px] truncate text-[11px] text-zinc-400" title="{{ $ticket->requester_email }}">{{ $ticket->requester_email }}</div>
                             </td>
                             <td class="whitespace-nowrap px-4 py-3.5">

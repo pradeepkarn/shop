@@ -146,23 +146,7 @@ new #[Layout('layouts.app')] #[Title('New Support Request')] class extends Compo
             @error('body') <p class="mt-1 text-xs text-rose-600 dark:text-rose-400">{{ $message }}</p> @enderror
         </div>
 
-        <div>
-            <label class="mb-1.5 block text-xs font-semibold text-zinc-700 dark:text-zinc-300">Attachments <span class="font-normal text-zinc-400">(up to {{ config('helpdesk.max_attachments') }} images or PDFs, 5 MB each)</span></label>
-            <input type="file" wire:model="attachments" multiple accept=".jpg,.jpeg,.png,.webp,.pdf"
-                   class="block w-full text-xs text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-zinc-800 hover:file:bg-zinc-200 dark:text-zinc-400 dark:file:bg-zinc-800 dark:file:text-zinc-200" />
-            <div wire:loading wire:target="attachments" class="mt-1 text-xs text-zinc-500">Uploading…</div>
-            @if ($attachments)
-                <ul class="mt-2 space-y-1">
-                    @foreach ($attachments as $i => $file)
-                        <li class="flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-1.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" wire:key="att-{{ $i }}">
-                            <span class="truncate">{{ $file->getClientOriginalName() }}</span>
-                            <button type="button" wire:click="removeAttachment({{ $i }})" class="ml-2 text-rose-600 hover:text-rose-700 dark:text-rose-400">Remove</button>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-            @error('attachments') <p class="mt-1 text-xs text-rose-600 dark:text-rose-400">{{ $message }}</p> @enderror
-        </div>
+        <x-support.attachments-input :files="$attachments" label="Attachments" />
 
         <div class="flex items-center justify-end gap-3 border-t border-zinc-100 pt-4 dark:border-zinc-800">
             <a href="{{ route('support.index') }}" wire:navigate class="text-xs font-semibold text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">Cancel</a>

@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Admin;
 
+use App\Helpdesk\Enums\RequesterType;
 use App\Helpdesk\Enums\TicketPriority;
 use App\Helpdesk\Enums\TicketStatus;
 use App\Helpdesk\Models\SupportTicket;
@@ -42,7 +43,7 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
     #[Computed]
     public function ticket(): ?SupportTicket
     {
-        return SupportTicket::query()->with(['assignee', 'user'])->where('ticket_number', $this->ticketNumber)->first();
+        return SupportTicket::query()->with(['assignee', 'user', 'sellerProfile'])->where('ticket_number', $this->ticketNumber)->first();
     }
 
     /**
@@ -64,7 +65,7 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
     }
 
     /**
-     * The customer's other tickets, newest first.
+     * The requester's other tickets, newest first.
      *
      * @return Collection<int, SupportTicket>
      */
@@ -123,7 +124,7 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
             return;
         }
 
-        session()->flash('success', $this->internal ? 'Internal note added.' : 'Reply sent to the customer.');
+        session()->flash('success', $this->internal ? 'Internal note added.' : 'Reply sent to the '.$this->ticket->requester_type->value.'.');
         $this->reset(['reply', 'attachments', 'internal']);
         $this->statusAfter = 'pending';
         $this->refreshTicket();
@@ -211,38 +212,23 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
                     'border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900' => ! $internal,
                 ])>
                     <div class="flex items-center gap-1 rounded-lg bg-zinc-100 p-1 text-xs font-semibold dark:bg-zinc-800 w-fit">
-                        <button type="button" wire:click="$set('internal', false)" @class(['rounded-md px-3 py-1.5 transition', 'bg-white text-zinc-900 shadow-xs dark:bg-zinc-700 dark:text-white' => ! $internal, 'text-zinc-500 dark:text-zinc-400' => $internal])>Reply to customer</button>
+                        <button type="button" wire:click="$set('internal', false)" @class(['rounded-md px-3 py-1.5 transition', 'bg-white text-zinc-900 shadow-xs dark:bg-zinc-700 dark:text-white' => ! $internal, 'text-zinc-500 dark:text-zinc-400' => $internal])>Reply to {{ $this->ticket->requester_type->value }}</button>
                         <button type="button" wire:click="$set('internal', true)" @class(['rounded-md px-3 py-1.5 transition', 'bg-white text-amber-800 shadow-xs dark:bg-zinc-700 dark:text-amber-300' => $internal, 'text-zinc-500 dark:text-zinc-400' => ! $internal])>Internal note</button>
                     </div>
 
                     <textarea wire:model="reply" rows="5" maxlength="{{ config('helpdesk.body_max') }}"
-                              placeholder="{{ $internal ? 'Only staff can see this note.' : 'Write your reply to the customer.' }}"
+                              placeholder="{{ $internal ? 'Only staff can see this note.' : 'Write your reply to the '.$this->ticket->requester_type->value.'.' }}"
                               class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-sm text-zinc-900 placeholder-zinc-400 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:focus:border-white"></textarea>
                     @error('reply') <p class="text-xs text-rose-600 dark:text-rose-400">{{ $message }}</p> @enderror
 
-                    <div>
-                        <input type="file" wire:model="attachments" multiple accept=".jpg,.jpeg,.png,.webp,.pdf"
-                               class="block w-full text-xs text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-zinc-800 hover:file:bg-zinc-200 dark:text-zinc-400 dark:file:bg-zinc-800 dark:file:text-zinc-200" />
-                        <div wire:loading wire:target="attachments" class="mt-1 text-xs text-zinc-500">Uploading…</div>
-                        @if ($attachments)
-                            <ul class="mt-2 space-y-1">
-                                @foreach ($attachments as $i => $file)
-                                    <li class="flex items-center justify-between rounded-lg bg-zinc-50 px-3 py-1.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" wire:key="att-{{ $i }}">
-                                        <span class="truncate">{{ $file->getClientOriginalName() }}</span>
-                                        <button type="button" wire:click="removeAttachment({{ $i }})" class="ml-2 text-rose-600 hover:text-rose-700 dark:text-rose-400">Remove</button>
-                                    </li>
-                                @endforeach
-                            </ul>
-                        @endif
-                        @error('attachments') <p class="mt-1 text-xs text-rose-600 dark:text-rose-400">{{ $message }}</p> @enderror
-                    </div>
+                    <x-support.attachments-input :files="$attachments" />
 
                     <div class="flex flex-col gap-3 border-t border-zinc-100 pt-3 sm:flex-row sm:items-center sm:justify-end dark:border-zinc-800">
                         @unless ($internal)
                             <label class="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
                                 <span>Then set status to</span>
                                 <select wire:model="statusAfter" class="rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs text-zinc-800 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                                    <option value="pending">Awaiting customer</option>
+                                    <option value="pending">Awaiting {{ $this->ticket->requester_type->value }}</option>
                                     <option value="resolved">Resolved</option>
                                     <option value="open">Open</option>
                                 </select>
@@ -324,7 +310,16 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
                 <div>
                     <p class="font-medium text-zinc-900 dark:text-white">{{ $this->ticket->requester_name }}</p>
                     <p class="break-all text-xs text-zinc-500 dark:text-zinc-400">{{ $this->ticket->requester_email }}</p>
-                    @if ($this->ticket->user_id)
+                    @if ($this->ticket->requester_type === RequesterType::Seller)
+                        @if ($this->ticket->sellerProfile)
+                            <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Store status: {{ $this->ticket->sellerProfile->status->label() }}</p>
+                            @can(AdminPermissions::SELLERS_VIEW)
+                                <a href="{{ route('admin.sellers.show', ['sellerProfile' => $this->ticket->seller_profile_id]) }}" wire:navigate class="mt-1 inline-block text-xs font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-400">View seller &rarr;</a>
+                            @endcan
+                        @else
+                            <p class="mt-1 text-xs italic text-zinc-400">Seller profile deleted</p>
+                        @endif
+                    @elseif ($this->ticket->user_id)
                         @can(AdminPermissions::CUSTOMERS_VIEW)
                             <a href="{{ route('admin.customers.show', ['user' => $this->ticket->user_id]) }}" wire:navigate class="mt-1 inline-block text-xs font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-400">View customer &rarr;</a>
                         @endcan

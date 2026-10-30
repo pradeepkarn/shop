@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Storefront;
 
+use App\Helpdesk\Enums\RequesterType;
 use App\Helpdesk\Enums\TicketStatus;
 use App\Helpdesk\Models\SupportTicket;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -19,6 +20,7 @@ new #[Layout('layouts.app')] #[Title('Help & Support')] class extends Component 
     {
         return SupportTicket::query()
             ->where('user_id', auth()->id())
+            ->where('requester_type', RequesterType::Customer->value)
             ->orderByRaw('CASE WHEN status = ? THEN 0 ELSE 1 END', [TicketStatus::Pending->value])
             ->latest('last_message_at')
             ->paginate(10);

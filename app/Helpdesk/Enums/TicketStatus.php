@@ -7,7 +7,7 @@ enum TicketStatus: string
     /** Waiting on staff. */
     case Open = 'open';
 
-    /** Staff replied; waiting on the requester. */
+    /** Staff replied; waiting on the requester (customer or seller). */
     case Pending = 'pending';
 
     /** Staff thinks it is done; a requester reply reopens it until it auto-closes. */
@@ -20,7 +20,7 @@ enum TicketStatus: string
     {
         return match ($this) {
             self::Open => 'Open',
-            self::Pending => 'Awaiting customer',
+            self::Pending => 'Awaiting requester',
             self::Resolved => 'Resolved',
             self::Closed => 'Closed',
         };
