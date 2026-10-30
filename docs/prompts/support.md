@@ -132,6 +132,15 @@ Principle: in support, customers and sellers only ever deal with the marketplace
 - Inbox shows each unresolved ticket's age; warning from day 25, "Overdue" after 30 days; filter "Over 30 days".
 - Report `/admin/support/report` (per month): tickets received, acknowledged within 48 hours (the automatic email counts as acknowledgement), resolved within 30 days, still open past 30 days, median first staff response.
 
+## Case view (one row per problem)
+
+A customer ticket and the seller ticket staff opened from it stay two tickets in the database (separate numbers, conversations, statuses and emails keep each side anonymous), but admin treats them as one **case**:
+
+- Inbox: one row per case (the customer ticket), with a "Seller" line showing the store, the seller side's status and ticket number. Linked seller tickets have no row of their own and are not counted separately. Seller tickets the seller opened themselves keep their own rows. Search by the seller ticket number or store name finds the case.
+- Ticket page: case header (customer's subject, order, owner, status) and **Customer / Seller** tabs, each with its own conversation, reply box, status and deadline. Opening a linked seller ticket's address redirects to the case on the Seller tab (`?side=seller`).
+- New seller-ticket status **`answered`**: set when staff forward the seller's reply to the customer, so the seller side stops showing as needing a reply.
+- Resolving or closing the customer ticket resolves or closes the seller side too; assigning either side assigns both.
+
 ## Checks outside support (findings, 2026-10-30)
 
 - **Cancellation charges:** none exist; customers cancel free while the package allows it. Nothing to change.

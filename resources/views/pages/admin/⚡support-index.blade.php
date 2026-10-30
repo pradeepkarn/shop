@@ -57,7 +57,9 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
     #[Computed]
     public function counts(): array
     {
+        // Counted per case: a seller ticket inside a customer's case is not a separate item of work
         $byStatus = SupportTicket::query()
+            ->caseRows()
             ->selectRaw('status, count(*) as total')
             ->groupBy('status')
             ->pluck('total', 'status');
@@ -67,9 +69,9 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
             'pending' => (int) ($byStatus[TicketStatus::Pending->value] ?? 0),
             'awaiting_seller' => (int) ($byStatus[TicketStatus::AwaitingSeller->value] ?? 0),
             'resolved' => (int) ($byStatus[TicketStatus::Resolved->value] ?? 0),
-            'unassigned' => SupportTicket::query()->where('status', TicketStatus::Open->value)->whereNull('assigned_admin_id')->count(),
-            'mine' => SupportTicket::query()->notClosed()->where('assigned_admin_id', auth('admin')->id())->count(),
-            'overdue' => SupportTicket::query()->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days')))->count(),
+            'unassigned' => SupportTicket::query()->caseRows()->where('status', TicketStatus::Open->value)->whereNull('assigned_admin_id')->count(),
+            'mine' => SupportTicket::query()->caseRows()->notClosed()->where('assigned_admin_id', auth('admin')->id())->count(),
+            'overdue' => SupportTicket::query()->caseRows()->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days')))->count(),
         ];
     }
 
@@ -79,6 +81,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
         $this->authorize('viewAny', SupportTicket::class);
 
         return SupportTicket::query()
+            ->caseRows()
             ->with(['assignee', 'linkedTicket'])
             ->when($this->status === 'active', fn ($q) => $q->notClosed())
             ->when($this->status === 'overdue', fn ($q) => $q->unresolved()->where('created_at', '<=', now()->subDays((int) config('helpdesk.resolve_within_days'))))
@@ -95,7 +98,11 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                     ->orWhere('subject', 'like', $term)
                     ->orWhere('requester_name', 'like', $term)
                     ->orWhere('requester_email', 'like', $term)
-                    ->orWhere('order_number', 'like', $term));
+                    ->orWhere('order_number', 'like', $term)
+                    // Find a case by its seller side's ticket number or store name too
+                    ->orWhereHas('linkedTicket', fn ($linked) => $linked
+                        ->where('ticket_number', 'like', $term)
+                        ->orWhere('requester_name', 'like', $term)));
             })
             // Urgent first, then the longest-waiting
             ->orderByRaw("CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END")
@@ -206,6 +213,16 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                                         @if ($ticket->order_number) &middot; {{ $ticket->order_number }} @endif
                                     </span>
                                 </a>
+                                @if ($ticket->linkedTicket)
+                                    {{-- The seller side of this case, shown inside the customer's row --}}
+                                    <a href="{{ route('admin.support.show', ['ticket' => $ticket->ticket_number, 'side' => 'seller']) }}" wire:navigate data-test="case-seller-line"
+                                       class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500 hover:underline dark:text-zinc-400">
+                                        <span class="rounded bg-violet-100 px-1 py-px font-bold uppercase tracking-wider text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">Seller</span>
+                                        <span class="font-medium text-zinc-700 dark:text-zinc-300">{{ $ticket->linkedTicket->requester_name }}</span>
+                                        <span>&middot; {{ $ticket->linkedTicket->status->label() }}</span>
+                                        <span class="text-zinc-400">&middot; {{ $ticket->linkedTicket->ticket_number }}</span>
+                                    </a>
+                                @endif
                             </td>
                             <td class="whitespace-nowrap px-4 py-3.5">
                                 <div class="flex items-center gap-1.5 font-medium text-zinc-900 dark:text-white">
@@ -221,7 +238,7 @@ new #[Layout('layouts.admin')] #[Title('Support Inbox')] class extends Component
                                 @if ($ticket->attention === 'seller_replied')
                                     <span class="ml-1 inline-flex items-center rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-semibold text-white">Seller replied</span>
                                 @endif
-                                @if ($ticket->isSellerOverdue() || ($ticket->linkedTicket && $ticket->status === TicketStatus::AwaitingSeller && $ticket->linkedTicket->isSellerOverdue()))
+                                @if ($ticket->isSellerOverdue() || $ticket->linkedTicket?->isSellerOverdue())
                                     <span class="ml-1 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold text-white">Seller overdue</span>
                                 @endif
                             </td>

@@ -138,6 +138,26 @@ class SupportTicket extends Model
     }
 
     /**
+     * One inbox row per case: seller tickets opened from a customer ticket are shown inside that customer's row.
+     *
+     * @param  Builder<SupportTicket>  $query
+     */
+    public function scopeCaseRows(Builder $query): void
+    {
+        $query->where(fn (Builder $q) => $q
+            ->where('requester_type', '!=', RequesterType::Seller->value)
+            ->orWhereNull('linked_ticket_id'));
+    }
+
+    /**
+     * A seller ticket that is the seller side of a customer's case.
+     */
+    public function isSellerSideOfCase(): bool
+    {
+        return $this->requester_type === RequesterType::Seller && $this->linked_ticket_id !== null;
+    }
+
+    /**
      * Not yet resolved or closed: still counts against the one-month resolution commitment.
      *
      * @param  Builder<SupportTicket>  $query

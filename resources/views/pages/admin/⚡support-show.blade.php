@@ -19,13 +19,19 @@ use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 
 new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Component {
     use WithFileUploads;
 
+    /** The case's ticket number: the customer ticket when a seller side exists. */
     public string $ticketNumber;
+
+    /** Which side of a case is open: "customer" or "seller". */
+    #[Url]
+    public string $side = 'customer';
 
     public string $reply = '';
 
@@ -64,14 +70,55 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
     {
         $this->authorize('viewAny', SupportTicket::class);
 
+        $found = SupportTicket::query()->with('linkedTicket')->where('ticket_number', $ticket)->first();
+        abort_unless($found, 404);
+
+        // A seller ticket inside a customer's case opens as that case, on the seller tab
+        if ($found->isSellerSideOfCase() && $found->linkedTicket) {
+            $this->ticketNumber = $found->linkedTicket->ticket_number;
+            $this->side = 'seller';
+            $this->redirectRoute('admin.support.show', ['ticket' => $found->linkedTicket->ticket_number, 'side' => 'seller'], navigate: true);
+
+            return;
+        }
+
         $this->ticketNumber = $ticket;
-        abort_unless($this->ticket, 404);
+        if (! $found->linkedTicket) {
+            $this->side = 'customer';
+        }
     }
 
+    /**
+     * The case: the ticket in the URL (a customer ticket, or a standalone seller ticket).
+     */
+    #[Computed]
+    public function caseTicket(): ?SupportTicket
+    {
+        return SupportTicket::query()->with(['assignee', 'user', 'sellerProfile', 'linkedTicket'])->where('ticket_number', $this->ticketNumber)->first();
+    }
+
+    /**
+     * The ticket on the open tab; every action on this page works on it.
+     */
     #[Computed]
     public function ticket(): ?SupportTicket
     {
-        return SupportTicket::query()->with(['assignee', 'user', 'sellerProfile', 'linkedTicket'])->where('ticket_number', $this->ticketNumber)->first();
+        $case = $this->caseTicket;
+
+        if ($this->side === 'seller' && $case?->linkedTicket) {
+            return SupportTicket::query()->with(['assignee', 'user', 'sellerProfile', 'linkedTicket'])->find($case->linkedTicket->id);
+        }
+
+        return $case;
+    }
+
+    public function switchSide(string $side): void
+    {
+        $this->side = $side === 'seller' && $this->caseTicket->linkedTicket ? 'seller' : 'customer';
+        $this->reset(['reply', 'attachments', 'internal', 'asking', 'forwardingMessageId', 'forwardBody', 'forwardAttachments']);
+        $this->statusAfter = 'pending';
+        $this->resetErrorBag();
+        $this->refreshTicket();
     }
 
     /**
@@ -174,7 +221,7 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
 
     protected function refreshTicket(): void
     {
-        unset($this->ticket, $this->messages, $this->otherTickets, $this->requesterAttachments, $this->forwardingMessage, $this->sellerPackages);
+        unset($this->caseTicket, $this->ticket, $this->messages, $this->otherTickets, $this->requesterAttachments, $this->forwardingMessage, $this->sellerPackages);
     }
 
     public function removeAttachment(int $index): void
@@ -361,31 +408,57 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
 }; ?>
 
 @php
+    $case = $this->caseTicket;
     $ticket = $this->ticket;
     $linked = $ticket->linkedTicket;
     $isCustomer = $ticket->requester_type === RequesterType::Customer;
+    $sellerSide = $case->requester_type === RequesterType::Customer ? $case->linkedTicket : null;
     $inputClass = 'w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3.5 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-zinc-900 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:focus:border-white';
 @endphp
 
 <div class="space-y-6">
+    {{-- Case header: the customer's complaint, whichever side is open --}}
     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
             <a href="{{ route('admin.support.index') }}" wire:navigate class="text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-white">&larr; Support inbox</a>
-            <h1 class="mt-1 break-words text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">{{ $ticket->subject }}</h1>
+            <h1 class="mt-1 break-words text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">{{ $case->subject }}</h1>
             <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                {{ $ticket->ticket_number }} &middot; {{ $ticket->category->label() }} &middot; opened @datetime($ticket->created_at)
+                {{ $case->ticket_number }} &middot; {{ $case->category->label() }}
+                @if ($case->order_number) &middot; {{ $case->order_number }} @endif
+                &middot; opened @datetime($case->created_at)
+                @if ($case->assignee) &middot; {{ $case->assignee->name }} @endif
             </p>
         </div>
         <div class="flex shrink-0 flex-wrap items-center gap-2 self-start">
-            @if ($ticket->attention === 'seller_replied')
+            @if ($case->attention === 'seller_replied')
                 <span class="inline-flex items-center rounded-full bg-violet-600 px-2.5 py-0.5 text-xs font-semibold text-white">Seller replied</span>
             @endif
-            @if ($ticket->isSellerOverdue() || ($linked && $linked->isSellerOverdue()))
+            @if ($case->isSellerOverdue() || $sellerSide?->isSellerOverdue())
                 <span class="inline-flex items-center rounded-full bg-rose-600 px-2.5 py-0.5 text-xs font-semibold text-white">Seller overdue</span>
             @endif
-            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 {{ $ticket->status->badgeClasses() }}">{{ $ticket->status->label() }}</span>
+            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 {{ $case->status->badgeClasses() }}">{{ $case->status->label() }}</span>
         </div>
     </div>
+
+    @if ($sellerSide)
+        {{-- Each side keeps its own conversation; staff switch between them here --}}
+        <div data-test="case-tabs" class="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
+            @foreach (['customer' => $case, 'seller' => $sellerSide] as $tab => $tabTicket)
+                <button type="button" wire:click="switchSide('{{ $tab }}')" @class([
+                    '-mb-px flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-semibold transition',
+                    'border-zinc-900 text-zinc-900 dark:border-white dark:text-white' => $side === $tab,
+                    'border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-white' => $side !== $tab,
+                ])>
+                    <span>{{ $tab === 'customer' ? 'Customer' : 'Seller' }}</span>
+                    <span class="text-xs font-normal text-zinc-400">{{ $tabTicket->requester_name }}</span>
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $tabTicket->status->badgeClasses() }}">{{ $tabTicket->status->label() }}</span>
+                    @if ($tab === 'seller' && $tabTicket->isSellerOverdue())
+                        <span class="size-2 rounded-full bg-rose-500" title="Seller overdue"></span>
+                    @endif
+                </button>
+            @endforeach
+        </div>
+    @endif
 
     @if (session()->has('success'))
         <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">{{ session('success') }}</div>
@@ -552,6 +625,7 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
                         <select wire:change="updateStatus($event.target.value)" class="w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
                             @foreach (TicketStatus::cases() as $option)
                                 @continue($option === TicketStatus::AwaitingSeller && (! $isCustomer || ! $linked))
+                                @continue($option === TicketStatus::Answered && $isCustomer)
                                 <option value="{{ $option->value }}" @selected($ticket->status === $option)>{{ $option->label() }}</option>
                             @endforeach
                         </select>
@@ -612,10 +686,10 @@ new #[Layout('layouts.admin')] #[Title('Support Ticket')] class extends Componen
                 <div data-test="linked-ticket-panel" class="space-y-3 rounded-2xl border border-violet-200 bg-white p-5 text-sm shadow-xs dark:border-violet-900 dark:bg-zinc-900">
                     <h2 class="text-xs font-bold uppercase tracking-wider text-violet-500">{{ $isCustomer ? 'Seller side' : 'Customer side' }}</h2>
                     @if ($linked)
-                        <a href="{{ route('admin.support.show', ['ticket' => $linked->ticket_number]) }}" wire:navigate class="block hover:underline">
+                        <button type="button" wire:click="switchSide('{{ $isCustomer ? 'seller' : 'customer' }}')" class="block text-left hover:underline">
                             <span class="font-medium text-zinc-900 dark:text-white">{{ $linked->ticket_number }}</span>
                             <span class="block text-xs text-zinc-500 dark:text-zinc-400">{{ $linked->requester_name }} &middot; {{ $linked->status->label() }}</span>
-                        </a>
+                        </button>
                         @if ($linked->reply_due_at)
                             <p @class(['text-xs', 'font-semibold text-rose-600 dark:text-rose-400' => $linked->isSellerOverdue(), 'text-zinc-500 dark:text-zinc-400' => ! $linked->isSellerOverdue()])>
                                 Seller reply due @datetime($linked->reply_due_at)

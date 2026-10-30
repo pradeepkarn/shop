@@ -362,7 +362,8 @@ class HelpdeskService
                     'order_number' => $sellerOrder->orderNumber,
                     'seller_order_id' => $sellerOrder->sellerOrderId,
                     'linked_ticket_id' => $customerTicket->id,
-                    'assigned_admin_id' => $admin->id,
+                    // One owner for both sides of the case
+                    'assigned_admin_id' => $customerTicket->assigned_admin_id ?? $admin->id,
                     'last_message_at' => now(),
                     'first_response_at' => now(),
                     'reply_due_at' => now()->addHours((int) config('helpdesk.seller_reply_hours')),
@@ -376,7 +377,11 @@ class HelpdeskService
                 ]);
 
                 $locked = SupportTicket::query()->lockForUpdate()->findOrFail($customerTicket->id);
-                $locked->fill(['linked_ticket_id' => $sellerTicket->id, 'attention' => null]);
+                $locked->fill([
+                    'linked_ticket_id' => $sellerTicket->id,
+                    'attention' => null,
+                    'assigned_admin_id' => $locked->assigned_admin_id ?? $admin->id,
+                ]);
                 $this->applyStatus($locked, TicketStatus::AwaitingSeller);
 
                 $this->systemNote($locked, "Asked the seller ({$profile->store_name}) on {$sellerTicket->ticket_number}.", internal: true);
@@ -446,6 +451,9 @@ class HelpdeskService
                 if ($toSeller && $lockedSource->status->acceptsReplies()) {
                     $lockedSource->attention = null;
                     $this->applyStatus($lockedSource, TicketStatus::AwaitingSeller);
+                } elseif (! $toSeller && $lockedSource->status === TicketStatus::Open) {
+                    // The seller's reply has been passed on: nothing waits on staff or the seller any more
+                    $this->applyStatus($lockedSource, TicketStatus::Answered);
                 }
                 $this->systemNote($lockedSource, "Forwarded to {$lockedTarget->ticket_number} by {$admin->name}.", internal: true);
 
@@ -592,33 +600,59 @@ class HelpdeskService
         if ($status === TicketStatus::AwaitingSeller && ($ticket->requester_type !== RequesterType::Customer || ! $ticket->linked_ticket_id)) {
             throw new DomainException('Only a customer ticket linked to a seller ticket can wait on the seller.');
         }
+        if ($status === TicketStatus::Answered && $ticket->requester_type !== RequesterType::Seller) {
+            throw new DomainException('Only a seller ticket can be marked answered.');
+        }
 
-        DB::transaction(function () use ($ticket, $admin, $status, $previous) {
-            $ticket->attention = null;
-            $this->applyStatus($ticket, $status);
-
-            $note = match ($status) {
-                TicketStatus::Resolved => 'Marked as resolved by support.',
-                TicketStatus::Closed => 'Closed by support.',
-                TicketStatus::Open => $previous === TicketStatus::Closed ? 'Reopened by support.' : null,
-                TicketStatus::Pending, TicketStatus::AwaitingSeller => null,
-            };
-            if ($note) {
-                $this->systemNote($ticket, $note, internal: false);
+        // Resolving or closing a case's customer ticket settles the seller side with it
+        $cascade = null;
+        if (in_array($status, [TicketStatus::Resolved, TicketStatus::Closed], true)
+            && $ticket->requester_type === RequesterType::Customer
+            && $ticket->linked_ticket_id) {
+            $linked = SupportTicket::query()->find($ticket->linked_ticket_id);
+            if ($linked && $linked->status->acceptsReplies() && $linked->status !== $status) {
+                $cascade = $linked;
             }
+        }
 
-            AdminActivityLogger::log('support.status_changed', $ticket, [
-                'ticket_number' => $ticket->ticket_number,
-                'from' => $previous->value,
-                'to' => $status->value,
-            ], $admin);
+        DB::transaction(function () use ($ticket, $admin, $status, $previous, $cascade) {
+            $this->changeStatus($ticket, $admin, $status, $previous);
+
+            if ($cascade) {
+                $this->changeStatus($cascade, $admin, $status, $cascade->status);
+            }
         });
 
         if ($status === TicketStatus::Resolved) {
             $this->notifyRequester($ticket, 'resolved');
+            if ($cascade) {
+                $this->notifyRequester($cascade, 'resolved');
+            }
         }
 
         return $ticket;
+    }
+
+    protected function changeStatus(SupportTicket $ticket, Admin $admin, TicketStatus $status, TicketStatus $previous): void
+    {
+        $ticket->attention = null;
+        $this->applyStatus($ticket, $status);
+
+        $note = match ($status) {
+            TicketStatus::Resolved => 'Marked as resolved by support.',
+            TicketStatus::Closed => 'Closed by support.',
+            TicketStatus::Open => $previous === TicketStatus::Closed ? 'Reopened by support.' : null,
+            TicketStatus::Pending, TicketStatus::AwaitingSeller, TicketStatus::Answered => null,
+        };
+        if ($note) {
+            $this->systemNote($ticket, $note, internal: false);
+        }
+
+        AdminActivityLogger::log('support.status_changed', $ticket, [
+            'ticket_number' => $ticket->ticket_number,
+            'from' => $previous->value,
+            'to' => $status->value,
+        ], $admin);
     }
 
     public function setPriority(SupportTicket $ticket, Admin $admin, TicketPriority $priority): SupportTicket
@@ -640,7 +674,7 @@ class HelpdeskService
     }
 
     /**
-     * Assign to an active staff member, or unassign with null.
+     * Assign to an active staff member, or unassign with null. A case's linked ticket follows, so one person owns both sides.
      */
     public function assign(SupportTicket $ticket, Admin $actor, ?int $assigneeId): SupportTicket
     {
@@ -652,26 +686,34 @@ class HelpdeskService
             }
         }
 
-        if ((int) $ticket->assigned_admin_id === (int) $assignee?->id) {
+        $tickets = collect([$ticket]);
+        if ($ticket->linked_ticket_id && ($linked = SupportTicket::query()->find($ticket->linked_ticket_id))) {
+            $tickets->push($linked);
+        }
+        $tickets = $tickets->reject(fn (SupportTicket $t) => (int) $t->assigned_admin_id === (int) $assignee?->id);
+
+        if ($tickets->isEmpty()) {
             return $ticket;
         }
 
-        DB::transaction(function () use ($ticket, $actor, $assignee) {
-            $previousId = $ticket->assigned_admin_id;
-            $ticket->update(['assigned_admin_id' => $assignee?->id]);
+        DB::transaction(function () use ($tickets, $actor, $assignee) {
+            foreach ($tickets as $t) {
+                $previousId = $t->assigned_admin_id;
+                $t->update(['assigned_admin_id' => $assignee?->id]);
 
-            $this->systemNote($ticket, $assignee
-                ? "Assigned to {$assignee->name} by {$actor->name}."
-                : "Unassigned by {$actor->name}.", internal: true);
+                $this->systemNote($t, $assignee
+                    ? "Assigned to {$assignee->name} by {$actor->name}."
+                    : "Unassigned by {$actor->name}.", internal: true);
 
-            AdminActivityLogger::log('support.assigned', $ticket, [
-                'ticket_number' => $ticket->ticket_number,
-                'from_admin_id' => $previousId,
-                'to_admin_id' => $assignee?->id,
-            ], $actor);
+                AdminActivityLogger::log('support.assigned', $t, [
+                    'ticket_number' => $t->ticket_number,
+                    'from_admin_id' => $previousId,
+                    'to_admin_id' => $assignee?->id,
+                ], $actor);
+            }
         });
 
-        return $ticket->load('assignee');
+        return $ticket->refresh()->load('assignee');
     }
 
     /**
